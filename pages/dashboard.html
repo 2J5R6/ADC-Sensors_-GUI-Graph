@@ -175,14 +175,14 @@
                 </div>
               </div>
             </div>
-            <!-- Card Peso -->
+            <!-- Card Peso -->ambiado a Intensidad de Rojo -->
             <div class="col-md-6">
               <div class="card sensor-card mb-4">
                 <div class="card-body p-3 text-center">
-                  <div class="icon icon-shape bg-gradient-dark shadow text-center border-radius-md mb-2">
-                    <i class="fas fa-weight text-lg opacity-10" aria-hidden="true"></i>
+                  <div class="icon icon-shape bg-gradient-dark shadow text-center border-radius-md mb-2">">
+                    <i class="fas fa-weight text-lg opacity-10" aria-hidden="true"></i>/i>
                   </div>
-                  <h5 class="mb-1 font-weight-bold">Peso</h5>
+                  <h5 class="mb-1 font-weight-bold">Peso</h5>d de Rojo</h5>
                   <p id="weight-value" class="sensor-value mb-0">--.- g</p>
                 </div>
               </div>
@@ -234,10 +234,10 @@
                     </select>
                   </div>
                 </div>
-                <!-- Peso -->
+                <!-- Peso -->ambiado a Intensidad de Rojo -->
                 <div class="col-md-4">
                   <div class="form-group">
-                    <label class="sensor-control-label">Tiempo de muestreo (Peso)</label>
+                    <label class="sensor-control-label">Tiempo de muestreo (Peso)</label>label>
                     <input type="number" id="weight-sample-time" class="form-control sensor-control" min="1" value="1">
                     <span class="actual-time">Tiempo real: <span id="weight-actual-time">--</span></span>
                   </div>
@@ -271,11 +271,11 @@
                 <h6>Datos en tiempo real</h6>
                 <p class="text-sm">
                   <i class="fa fa-thermometer-half text-success me-1"></i>Temperatura (PT100)
-                  <span class="ms-3"><i class="fa fa-weight text-primary me-1"></i>Peso (Celda de carga)</span>
+                  <span class="ms-3"><i class="fa fa-weight text-primary me-1"></i>Peso (Celda de carga)</span></span>
                 </p>
               </div>
-              <button id="chart-refresh" class="btn btn-sm btn-outline-secondary">
-                <i class="fas fa-sync-alt me-1"></i> Actualizar gráfico
+              <button id="chart-refresh" class="btn btn-sm btn-outline-danger">
+                <i class="fas fa-pause me-1"></i> Detener gráfica
               </button>
             </div>
             <div class="card-body p-3">
@@ -371,8 +371,30 @@
   <script src="../assets/js/plugins/perfect-scrollbar.min.js"></script>
   <script src="../assets/js/plugins/smooth-scrollbar.min.js"></script>
   <script src="../assets/js/plugins/chartjs.min.js"></script>
+  
+  <!-- Limpiar variables globales -->
+  <script>
+    // Eliminar variables globales y gráficos existentes
+    if (typeof chartLine !== 'undefined') {
+      try { chartLine.destroy(); } catch(e) { console.error(e); }
+    }
+    
+    // Limpieza completa de variables globales
+    window.chartLine = undefined;
+    window.temperatureData = undefined;
+    window.weightData = undefined;
+    window.timeLabels = undefined;
+    window.ws = undefined;
+    window.updateChart = undefined;
+  </script>
+  
+  <!-- Cargar primero sensors.js -->
   <script src="../assets/js/sensors.js"></script>
+  <!-- Herramientas de prueba -->
+  <script src="../assets/js/test-data.js"></script>
+  <!-- Y después connectivity.js -->
   <script src="../assets/js/connectivity.js"></script>
+
   <script>
     var win = navigator.platform.indexOf('Win') > -1;
     if (win && document.querySelector('#sidenav-scrollbar')) {
