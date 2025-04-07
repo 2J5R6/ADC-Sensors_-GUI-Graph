@@ -53,14 +53,88 @@ const server = app.listen(PORT, () => {
   console.log(`Servidor web corriendo en http://localhost:${PORT}`);
 });
 
-// Configuración WebSocket
-const wss = new WebSocket.Server({ server });
-
 // Variable para almacenar el último mensaje de cada tipo
 let lastMessages = {
   temperature: null,
   weight: null
 };
+
+// Set para almacenar conexiones activas
+const connections = new Set();
+
+// Estado del sistema
+let systemState = {
+  isRunning: false,
+  tempSampleTime: 1,
+  weightSampleTime: 1,
+  timeUnit: 's',
+  tempFilter: false,
+  weightFilter: false,
+  tempSamples: 10,
+  weightSamples: 10
+};
+
+// Configuración WebSocket con ping/pong para mantener conexiones vivas
+const wss = new WebSocket.Server({ 
+  server,
+  clientTracking: true
+});
+
+// Mantener conexiones activas con heartbeat
+function heartbeat() {
+  this.isAlive = true;
+}
+
+// Verificar conexiones cada 30 segundos
+const heartbeatInterval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) {
+      console.log('Cliente inactivo desconectado');
+      return ws.terminate();
+    }
+    
+    ws.isAlive = false;
+    ws.ping(() => {});
+  });
+}, 30000);
+
+// Limpiar intervalo cuando se cierra el servidor
+wss.on('close', () => {
+  clearInterval(heartbeatInterval);
+});
+
+// Función para enviar un comando al puerto serial con reintentos
+function sendSerialCommand(port, command, retries = 3) {
+  return new Promise((resolve, reject) => {
+    if (!port) {
+      return reject(new Error("Puerto serial no disponible"));
+    }
+    
+    // Asegurar que el comando termine con salto de línea
+    const formattedCmd = command.endsWith('\r\n') ? command : command + '\r\n';
+    let attempt = 0;
+    
+    const attemptSend = () => {
+      attempt++;
+      console.log(`Intento ${attempt}/${retries} de enviar comando: ${command}`);
+      
+      port.write(formattedCmd, (err) => {
+        if (err) {
+          console.error(`Error al enviar ${command} (intento ${attempt}):`, err);
+          if (attempt < retries) {
+            setTimeout(attemptSend, 100);
+          } else {
+            reject(err);
+          }
+        } else {
+          resolve();
+        }
+      });
+    };
+    
+    attemptSend();
+  });
+}
 
 // Función para abrir el puerto serial
 function openSerialPort() {
@@ -85,6 +159,23 @@ function openSerialPort() {
     // Manejar apertura del puerto
     port.on('open', () => {
       console.log(`Puerto serie ${SERIAL_PORT} conectado a ${BAUD_RATE} baudios`);
+      
+      // Secuencia de inicialización
+      setTimeout(async () => {
+        console.log('Enviando comandos de inicialización...');
+        
+        try {
+          // Primero detener cualquier adquisición en curso
+          await sendSerialCommand(port, 'b');
+          
+          // Luego solicitar el estado
+          setTimeout(async () => {
+            await sendSerialCommand(port, 'STATUS');
+          }, 500);
+        } catch (err) {
+          console.error('Error en secuencia de inicialización:', err);
+        }
+      }, 1000);
     });
     
     // Procesar datos recibidos del puerto serie
@@ -106,22 +197,92 @@ function openSerialPort() {
       else if (data.startsWith('PESO:')) {
         const weightValue = parseFloat(data.substring(5));
         if (!isNaN(weightValue)) {
+          console.log(`Valor de peso recibido: ${weightValue}`);
           sensorData = { type: 'weight', value: weightValue };
           lastMessages.weight = sensorData;
         }
       }
       // Procesar confirmaciones de comandos
-      else if (data.startsWith('OK:')) {
+      else if (data.startsWith('OK:') || data.startsWith('ERROR:')) {
         sensorData = { type: 'confirmation', message: data };
+        console.log('Confirmación recibida:', data);
+        
+        // Actualizar estado del sistema basado en confirmaciones
+        if (data.includes('OK:a')) {
+          systemState.isRunning = true;
+          console.log('Sistema de adquisición ACTIVADO');
+        }
+        else if (data.includes('OK:b')) {
+          systemState.isRunning = false;
+          console.log('Sistema de adquisición DETENIDO');
+          
+          // Solicitar estado actual después de detener
+          setTimeout(() => {
+            if (port) {
+              sendSerialCommand(port, 'STATUS')
+                .catch(err => console.error('Error al solicitar estado:', err));
+            }
+          }, 300);
+        }
+        else if (data.includes('OK:T1:')) {
+          systemState.tempSampleTime = parseInt(data.split(':')[2]);
+        }
+        else if (data.includes('OK:T2:')) {
+          systemState.weightSampleTime = parseInt(data.split(':')[2]);
+        }
+        else if (data.includes('OK:TU:')) {
+          systemState.timeUnit = data.split(':')[2];
+        }
+        else if (data.includes('OK:FT:')) {
+          systemState.tempFilter = data.includes('OK:FT:1');
+        }
+        else if (data.includes('OK:FP:')) {
+          systemState.weightFilter = data.includes('OK:FP:1');
+        }
+        else if (data.includes('OK:ST:')) {
+          systemState.tempSamples = parseInt(data.split(':')[2]);
+        }
+        else if (data.includes('OK:SP:')) {
+          systemState.weightSamples = parseInt(data.split(':')[2]);
+        }
+      }
+      // Procesar mensajes de estado
+      else if (data.startsWith('INFO:STATUS:')) {
+        try {
+          // Extraer información del estado
+          const statusInfo = data.substring(12);
+          const statusParts = statusInfo.split(',');
+          
+          for (const part of statusParts) {
+            const [key, value] = part.split('=');
+            if (key === 'T1') systemState.tempSampleTime = parseInt(value);
+            if (key === 'T2') systemState.weightSampleTime = parseInt(value);
+            if (key === 'TU') systemState.timeUnit = value;
+            if (key === 'FT') systemState.tempFilter = value === '1';
+            if (key === 'FP') systemState.weightFilter = value === '1';
+            if (key === 'ST') systemState.tempSamples = parseInt(value);
+            if (key === 'SP') systemState.weightSamples = parseInt(value);
+            if (key === 'RUN') systemState.isRunning = value === '1';
+          }
+          
+          // Crear mensaje de estado para enviar a clientes
+          sensorData = { 
+            type: 'status',
+            state: {...systemState}  // Enviar una copia del estado
+          };
+          console.log('Estado del sistema actualizado:', systemState);
+        } catch (err) {
+          console.error('Error al procesar estado:', err);
+        }
       }
       
       // Enviar los datos a todos los clientes conectados
       if (sensorData) {
-        wss.clients.forEach(client => {
+        for (const client of connections) {
           if (client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify(sensorData));
           }
-        });
+        }
       }
     });
     
@@ -135,7 +296,7 @@ function openSerialPort() {
     setTimeout(() => {
       console.log('Reintentando conexión al puerto serial...');
       openSerialPort();
-    }, 5000); // Reintentar en 5 segundos
+    }, 5000);
     
     return null;
   }
@@ -147,14 +308,34 @@ let serialConnection = openSerialPort();
 // Manejar conexiones WebSocket
 wss.on('connection', (ws) => {
   console.log('Cliente conectado');
+  connections.add(ws);
+  
+  // Configurar heartbeat para esta conexión
+  ws.isAlive = true;
+  ws.on('pong', heartbeat);
+  
+  // Enviar el estado actual del sistema
+  ws.send(JSON.stringify({
+    type: 'status',
+    state: {...systemState}
+  }));
   
   // Enviar los últimos valores al nuevo cliente
   if (lastMessages.temperature) {
     ws.send(JSON.stringify(lastMessages.temperature));
+    console.log('Enviando último valor de temperatura al nuevo cliente');
   }
+  
   if (lastMessages.weight) {
     ws.send(JSON.stringify(lastMessages.weight));
+    console.log('Enviando último valor de peso al nuevo cliente');
   }
+  
+  // Enviar confirmación de conexión
+  ws.send(JSON.stringify({
+    type: 'confirmation',
+    message: 'CONNECTION_OK'
+  }));
   
   // Manejar comandos desde el frontend
   ws.on('message', (message) => {
@@ -163,49 +344,20 @@ wss.on('connection', (ws) => {
       
       // Si es un comando para la STM32
       if (data.command && serialConnection && serialConnection.port) {
-        console.log(`Enviando comando: ${data.command}`);
-        serialConnection.port.write(data.command + '\r\n', (err) => {
-          if (err) {
-            console.error('Error al enviar comando:', err);
+        const cmd = data.command.trim();
+        console.log(`Enviando comando a STM32: ${cmd}`);
+        
+        // Para comandos simples como 'a' y 'b', usar más reintentos
+        const retries = (cmd === 'a' || cmd === 'b') ? 5 : 3;
+        
+        sendSerialCommand(serialConnection.port, cmd, retries)
+          .catch(err => {
+            console.error(`Error en comando ${cmd}:`, err);
             ws.send(JSON.stringify({
               type: 'error',
               message: `Error al enviar comando: ${err.message}`
             }));
-          }
-        });
-      }
-    } catch (e) {
-      console.error('Error al procesar mensaje:', e);
-    }
-  });
-  
-  // Manejar desconexión
-  ws.on('close', () => {
-    console.log('Cliente desconectado');
-  });
-});
-
-// Objeto para almacenar conexiones activas
-let connections = new Set();
-
-// Manejar conexiones WebSocket
-wss.on('connection', (ws) => {
-  console.log('Cliente conectado');
-  connections.add(ws);
-  
-  // Manejar comandos desde el frontend
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message);
-      
-      // Si es un comando para la STM32
-      if (data.command && serialConnection && serialConnection.port) {
-        console.log(`Enviando comando: ${data.command}`);
-        serialConnection.port.write(data.command + '\r\n', (err) => {
-          if (err) {
-            console.error('Error al enviar comando:', err);
-          }
-        });
+          });
       }
     } catch (e) {
       console.error('Error al procesar mensaje:', e);
@@ -219,35 +371,61 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Ruta para mostrar información del sistema
-app.get('/api/status', (req, res) => {
-  let status = {
-    server: {
-      port: PORT,
-      uptime: process.uptime()
-    },
-    serial: {
-      port: SERIAL_PORT,
-      baudRate: BAUD_RATE,
-      connected: serialConnection && serialConnection.port ? true : false
-    },
-    clients: wss.clients.size
-  };
+// Crear archivo de conectividad para monitoreo de conexión
+const connectivityJsPath = path.join(__dirname, '..', 'assets', 'js', 'connectivity.js');
+if (!fs.existsSync(connectivityJsPath)) {
+  const connectivityJsContent = `
+// Script para monitoreo de la conexión WebSocket
+(function() {
+  // Variables de control
+  let connectionAttempts = 0;
+  const MAX_RETRY = 5;
+  let reconnectTimer = null;
   
-  res.json(status);
-});
-
-// Ruta para reiniciar la conexión serial
-app.post('/api/restart-serial', (req, res) => {
-  if (serialConnection && serialConnection.port) {
-    serialConnection.port.close();
+  // Función para verificar el estado de la conexión
+  function checkConnection() {
+    if (window.sensorMonitor && window.sensorMonitor.ws) {
+      if (window.sensorMonitor.ws.readyState === WebSocket.CLOSED || 
+          window.sensorMonitor.ws.readyState === WebSocket.CLOSING) {
+        
+        console.log("[Connectivity] Detectada conexión cerrada");
+        connectionAttempts++;
+        
+        if (connectionAttempts <= MAX_RETRY) {
+          console.log(\`[Connectivity] Reiniciando conexión (intento \${connectionAttempts})\`);
+          window.sensorMonitor.initWebSocket();
+        } else {
+          console.log("[Connectivity] Máximo de intentos alcanzado");
+        }
+      } else if (window.sensorMonitor.ws.readyState === WebSocket.OPEN) {
+        connectionAttempts = 0; // Resetear contador cuando hay conexión
+        console.log("[Connectivity] Conexión activa");
+      }
+    }
   }
   
-  setTimeout(() => {
-    serialConnection = openSerialPort();
-    res.json({ success: true, message: 'Reinicio de conexión serial iniciado' });
-  }, 1000);
-});
+  // Verificar periódicamente
+  window.addEventListener('load', () => {
+    // Comenzar verificación después de 5 segundos
+    setTimeout(() => {
+      reconnectTimer = setInterval(checkConnection, 5000);
+    }, 5000);
+  });
+  
+  // Limpiar al cerrar
+  window.addEventListener('beforeunload', () => {
+    if (reconnectTimer) clearInterval(reconnectTimer);
+  });
+})();
+`;
+
+  try {
+    fs.writeFileSync(connectivityJsPath, connectivityJsContent);
+    console.log('Archivo connectivity.js creado para monitoreo de conexión');
+  } catch (err) {
+    console.error('No se pudo crear el archivo connectivity.js:', err);
+  }
+}
 
 // Manejar errores no capturados
 process.on('uncaughtException', (err) => {

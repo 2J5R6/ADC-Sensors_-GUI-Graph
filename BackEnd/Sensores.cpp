@@ -73,49 +73,122 @@ void procesar_comando(const char* cmd) {
     char* tipo = strtok(temp, ":");
     char* valor = strtok(NULL, "\r\n");
     
-    if (tipo == NULL || valor == NULL) return;
+    if (tipo == NULL) return;
     
-    int val = atoi(valor);
+    // Manejo especial para el comando STATUS que no requiere valor
+    if (strcmp(tipo, "STATUS") == 0) {
+        sprintf(text, "INFO:STATUS:T1=%lu,T2=%lu,TU=%c,FT=%d,FP=%d,ST=%d,SP=%d,RUN=%d\r\n", 
+                tiempo1, tiempo2, time_unit, filtro_temp, filtro_peso, temp_samples, peso_samples, flag);
+        UART_Send_String(text);
+        return;
+    }
     
+    // Manejo especial para los comandos a y b que no requieren valor
+    if (strcmp(tipo, "a") == 0) {
+        flag = 1; // Activar adquisición
+        sprintf(text, "OK:a\r\n");
+        UART_Send_String(text);
+        return;
+    }
+    
+    if (strcmp(tipo, "b") == 0) {
+        flag = 0; // Detener adquisición
+        sprintf(text, "OK:b\r\n");
+        UART_Send_String(text);
+        return;
+    }
+    
+    // Para el resto de comandos, validar que tengan valor
+    if (valor == NULL) {
+        sprintf(text, "ERROR:Valor requerido para %s\r\n", tipo);
+        UART_Send_String(text);
+        return;
+    }
+    
+    // Procesar comandos con valores
     if (strcmp(tipo, "T1") == 0) {
         // Cambiar tiempo de muestreo para temperatura
-        if (val > 0) tiempo1 = val;
+        int val = atoi(valor);
+        if (val > 0) {
+            tiempo1 = val;
+            sprintf(text, "OK:T1:%d\r\n", val);
+            UART_Send_String(text);
+            
+            // Debug - confirmar el comando recibido
+            sprintf(text, "DEBUG:Tiempo temperatura actualizado a %lu %c\r\n", tiempo1, time_unit);
+            UART_Send_String(text);
+        }
     } else if (strcmp(tipo, "T2") == 0) {
         // Cambiar tiempo de muestreo para peso
-        if (val > 0) tiempo2 = val;
+        int val = atoi(valor);
+        if (val > 0) {
+            tiempo2 = val;
+            sprintf(text, "OK:T2:%d\r\n", val);
+            UART_Send_String(text);
+            
+            // Debug - confirmar el comando recibido
+            sprintf(text, "DEBUG:Tiempo peso actualizado a %lu %c\r\n", tiempo2, time_unit);
+            UART_Send_String(text);
+        }
     } else if (strcmp(tipo, "TU") == 0) {
         // Cambiar unidad de tiempo (m, s, M)
         if (valor[0] == 'm' || valor[0] == 's' || valor[0] == 'M') {
             time_unit = valor[0];
+            sprintf(text, "OK:TU:%c\r\n", time_unit);
+            UART_Send_String(text);
+            
+            // Debug - confirmar el comando recibido
+            sprintf(text, "DEBUG:Unidad de tiempo actualizada a %c\r\n", time_unit);
+            UART_Send_String(text);
         }
     } else if (strcmp(tipo, "FT") == 0) {
         // Filtro temperatura (0=off, 1=on)
-        filtro_temp = (val == 0) ? 0 : 1;
+        filtro_temp = (atoi(valor) == 0) ? 0 : 1;
+        sprintf(text, "OK:FT:%d\r\n", filtro_temp);
+        UART_Send_String(text);
     } else if (strcmp(tipo, "FP") == 0) {
         // Filtro peso (0=off, 1=on)
-        filtro_peso = (val == 0) ? 0 : 1;
+        filtro_peso = (atoi(valor) == 0) ? 0 : 1;
+        sprintf(text, "OK:FP:%d\r\n", filtro_peso);
+        UART_Send_String(text);
     } else if (strcmp(tipo, "ST") == 0) {
         // Muestras para filtro temperatura
-        if (val > 0 && val <= MAX_SAMPLES) temp_samples = val;
+        int val = atoi(valor);
+        if (val > 0 && val <= MAX_SAMPLES) {
+            temp_samples = val;
+            sprintf(text, "OK:ST:%d\r\n", temp_samples);
+            UART_Send_String(text);
+        }
     } else if (strcmp(tipo, "SP") == 0) {
         // Muestras para filtro peso
-        if (val > 0 && val <= MAX_SAMPLES) peso_samples = val;
+        int val = atoi(valor);
+        if (val > 0 && val <= MAX_SAMPLES) {
+            peso_samples = val;
+            sprintf(text, "OK:SP:%d\r\n", peso_samples);
+            UART_Send_String(text);
+        }
+    } else {
+        // Comando desconocido
+        sprintf(text, "ERROR:Comando desconocido: %s\r\n", tipo);
+        UART_Send_String(text);
     }
-    
-    // Confirmar recepción de comando
-    sprintf(text, "OK:%s:%s\r\n", tipo, valor);
-    UART_Send_String(text);
 }
 
 extern "C" {
     // Interrupción del botón de usuario
     void EXTI15_10_IRQHandler(void) {
-        EXTI->PR |= 1; // Limpiar flag de interrupción
+        EXTI->PR |= (1<<13); // Limpiar flag de interrupción para EXTI13
         if (((GPIOC->IDR & (1<<13)) >> 13) == 1) {
-            flag = 0;
-            // Incremento de tiempos de muestreo (funcionalidad original)
-            tiempo1++;
-            tiempo2++;
+            // Cambiar estado de adquisición
+            flag = !flag;
+            
+            // Notificar cambio
+            if (flag) {
+                sprintf(text, "INFO:Button pressed - acquisition started\r\n");
+            } else {
+                sprintf(text, "INFO:Button pressed - acquisition stopped\r\n");
+            }
+            UART_Send_String(text);
         }
     }
 
@@ -123,51 +196,57 @@ extern "C" {
     void TIM2_IRQHandler(void) { 
         TIM2->SR &= ~(1<<0); // Limpiar el flag de interrupción del TIM2
         
-        // Tomar lectura del ADC2 (temperatura)
-        ADC2->CR2 |= (1<<30); // Iniciar conversión A/D
-        while (((ADC2->SR & (1<<1)) >> 1) == 0) {} // Esperar a que termine la conversión
-        ADC2->SR &= ~(1<<1); // Limpiar el flag EOC
-        digital1 = ADC2->DR;
-        voltaje1 = (float)digital1 * (3.3f / 4095.0f); // Corrección para resolución completa de 12 bits
-        gradospt100 = (30.305f * voltaje1);
-        
-        // Aplicar filtro promedio si está activado
-        if (filtro_temp) {
-            temp_buffer[temp_index] = gradospt100;
-            temp_index = (temp_index + 1) % temp_samples;
-            gradospt100 = calcularPromedio(temp_buffer, temp_samples);
+        // Solo enviar datos si la adquisición está activa
+        if (flag) {
+            // Tomar lectura del ADC2 (temperatura)
+            ADC2->CR2 |= (1<<30); // Iniciar conversión A/D
+            while (((ADC2->SR & (1<<1)) >> 1) == 0) {} // Esperar a que termine la conversión
+            ADC2->SR &= ~(1<<1); // Limpiar el flag EOC
+            digital1 = ADC2->DR;
+            voltaje1 = (float)digital1 * (3.3f / 4095.0f); // Corrección para resolución completa de 12 bits
+            gradospt100 = (30.305f * voltaje1);
+            
+            // Aplicar filtro promedio si está activado
+            if (filtro_temp) {
+                temp_buffer[temp_index] = gradospt100;
+                temp_index = (temp_index + 1) % temp_samples;
+                gradospt100 = calcularPromedio(temp_buffer, temp_samples);
+            }
+            
+            // Enviar datos formateados por UART
+            sprintf(text, "TEMP:%.2f\r\n", gradospt100);
+            UART_Send_String(text);
+            
+            // Toggle LED para indicar actividad
+            GPIOB->ODR ^= (1<<7);
         }
-        
-        // Enviar datos formateados por UART
-        sprintf(text, "TEMP:%.2f\r\n", gradospt100);
-        UART_Send_String(text);
-        
-        // Toggle LED para indicar actividad
-        GPIOB->ODR ^= (1<<7);
     }
 
     // Interrupción del Timer 5 - Muestreo de peso
     void TIM5_IRQHandler(void) { 
         TIM5->SR &= ~(1<<0); // Limpiar el flag de interrupción del TIM5
         
-        // Tomar lectura del ADC1 (peso)
-        ADC1->CR2 |= (1<<30); // Iniciar conversión A/D
-        while (((ADC1->SR & (1<<1)) >> 1) == 0) {} // Esperar a que termine la conversión
-        ADC1->SR &= ~(1<<1); // Limpiar el flag EOC
-        digital2 = ADC1->DR;
-        voltaje2 = (float)digital2 * (3.3f / 4095.0f); // Corrección para resolución completa de 12 bits
-        pesog = (voltaje2 * 303.03f);
-        
-        // Aplicar filtro promedio si está activado
-        if (filtro_peso) {
-            peso_buffer[peso_index] = pesog;
-            peso_index = (peso_index + 1) % peso_samples;
-            pesog = calcularPromedio(peso_buffer, peso_samples);
+        // Solo enviar datos si la adquisición está activa
+        if (flag) {
+            // Tomar lectura del ADC1 (peso)
+            ADC1->CR2 |= (1<<30); // Iniciar conversión A/D
+            while (((ADC1->SR & (1<<1)) >> 1) == 0) {} // Esperar a que termine la conversión
+            ADC1->SR &= ~(1<<1); // Limpiar el flag EOC
+            digital2 = ADC1->DR;
+            voltaje2 = (float)digital2 * (3.3f / 4095.0f); // Corrección para resolución completa de 12 bits
+            pesog = (voltaje2 * 303.03f);
+            
+            // Aplicar filtro promedio si está activado
+            if (filtro_peso) {
+                peso_buffer[peso_index] = pesog;
+                peso_index = (peso_index + 1) % peso_samples;
+                pesog = calcularPromedio(peso_buffer, peso_samples);
+            }
+            
+            // Enviar datos formateados por UART
+            sprintf(text, "PESO:%.2f\r\n", pesog);
+            UART_Send_String(text);
         }
-        
-        // Enviar datos formateados por UART
-        sprintf(text, "PESO:%.2f\r\n", pesog);
-        UART_Send_String(text);
     }
     
     // Interrupción del USART3 - Recepción de comandos
@@ -177,8 +256,16 @@ extern "C" {
             
             if (d == 'a') {
                 flag = 1; // Comando para iniciar
+                // Enviar confirmación explícita
+                UART_Send_String("OK:a\r\n");
+                // Debug - confirmar activación
+                UART_Send_String("DEBUG:Adquisicion activada\r\n");
             } else if (d == 'b') {
                 flag = 0; // Comando para detener
+                // Enviar confirmación explícita
+                UART_Send_String("OK:b\r\n");
+                // Debug - confirmar desactivación
+                UART_Send_String("DEBUG:Adquisicion detenida\r\n");
             } else if (d == '\n' || d == '\r') {
                 // Fin de comando, procesarlo
                 if (cmd_index > 0) {
@@ -226,7 +313,7 @@ int main() {
     // ----- Configuración de interrupciones externas -----
     RCC->APB2ENR |= (1<<14); // Habilitar reloj SYSCFG
     SYSCFG->EXTICR[3] &= ~(0b1111<<4); // Limpiar 
-    SYSCFG->EXTICR[3] |= (1<<5); // PC13 para EXTI13
+    SYSCFG->EXTICR[3] |= (2<<4); // PC13 para EXTI13 (valor correcto es 2)
     EXTI->IMR |= (1<<13); // Desenmascarar EXTI13
     EXTI->RTSR |= (1<<13); // Trigger en flanco ascendente
     
@@ -290,17 +377,12 @@ int main() {
     NVIC_EnableIRQ(TIM5_IRQn); 
     
     // Mensaje de inicio
-    UART_Send_String("Sistema iniciado\r\n");
+    UART_Send_String("Sistema iniciado v3.0\r\n");
     UART_Send_String("Enviar 'a' para iniciar, 'b' para detener\r\n");
+    UART_Send_String("Comandos: T1:tiempo, T2:tiempo, TU:[m,s,M], FT:[0,1], FP:[0,1], ST:muestras, SP:muestras\r\n");
     
     // Bucle principal
     while(1) {
-        if (flag == 1) {
-            // Modo de adquisición activo
-            GPIOB->ODR ^= (1<<0); // Toggle LED para indicar funcionamiento
-            SysTick_ms(1000);
-        }
-        
         // Actualizar periodos de muestreo de timers
         uint32_t factor = 1;
         
@@ -324,11 +406,35 @@ int main() {
         
         // Actualizar periodos de los timers solo si han cambiado
         if (TIM2->ARR != arr_value1) {
+            TIM2->CR1 &= ~(1<<0); // Deshabilitar timer
             TIM2->ARR = arr_value1;
+            TIM2->CNT = 0; // Reiniciar contador
+            TIM2->CR1 |= (1<<0); // Habilitar timer
+            
+            // Informar del cambio
+            sprintf(text, "INFO:Timer temp actualizado: %lu ms\r\n", arr_value1);
+            UART_Send_String(text);
         }
         
         if (TIM5->ARR != arr_value2) {
+            TIM5->CR1 &= ~(1<<0); // Deshabilitar timer
             TIM5->ARR = arr_value2;
+            TIM5->CNT = 0; // Reiniciar contador
+            TIM5->CR1 |= (1<<0); // Habilitar timer
+            
+            // Informar del cambio
+            sprintf(text, "INFO:Timer peso actualizado: %lu ms\r\n", arr_value2);
+            UART_Send_String(text);
+        }
+        
+        if (flag == 1) {
+            // Modo de adquisición activo
+            GPIOB->ODR ^= (1<<0); // Toggle LED para indicar funcionamiento
+            SysTick_ms(500);
+        } else {
+            // Modo inactivo
+            GPIOB->ODR &= ~(1<<0); // LED apagado en modo inactivo
+            SysTick_ms(200);
         }
     }
 }

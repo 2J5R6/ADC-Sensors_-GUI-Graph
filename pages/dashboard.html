@@ -274,8 +274,8 @@
                   <span class="ms-3"><i class="fa fa-weight text-primary me-1"></i>Peso (Celda de carga)</span>
                 </p>
               </div>
-              <button id="chart-refresh" class="btn btn-sm btn-outline-primary">
-                <i class="fas fa-project-diagram me-1"></i> Conectar puntos
+              <button id="chart-refresh" class="btn btn-sm btn-outline-secondary">
+                <i class="fas fa-sync-alt me-1"></i> Actualizar gráfico
               </button>
             </div>
             <div class="card-body p-3">
@@ -372,120 +372,8 @@
   <script src="../assets/js/plugins/smooth-scrollbar.min.js"></script>
   <script src="../assets/js/plugins/chartjs.min.js"></script>
   <script src="../assets/js/sensors.js"></script>
+  <script src="../assets/js/connectivity.js"></script>
   <script>
-    let temperatureData = [];
-    let timeLabels = [];
-    let maxDataPoints = 10; // Número de puntos a mostrar en el gráfico
-
-    // Función para actualizar el gráfico
-    function updateChart(chart, newData) {
-        temperatureData.push(newData);
-        timeLabels.push(new Date().toLocaleTimeString());
-        
-        if (temperatureData.length > maxDataPoints) {
-            temperatureData.shift();
-            timeLabels.shift();
-        }
-        
-        chart.data.labels = timeLabels;
-        chart.data.datasets[0].data = temperatureData;
-        chart.update();
-    }
-
-    // Configuración del WebSocket
-    let ws = new WebSocket('ws://your-stm32-ip:port');
-
-    ws.onmessage = function(event) {
-        const temperature = parseFloat(event.data);
-        if (!isNaN(temperature)) {
-            updateChart(chartLine, temperature);
-        }
-    };
-
-    // Modificar la configuración del gráfico existente
-    var ctx2 = document.getElementById("chart-line").getContext("2d");
-    var chartLine = new Chart(ctx2, {
-        type: "line",
-        data: {
-            labels: timeLabels,
-            datasets: [{
-                label: "Temperature (°C)",
-                tension: 0.4,
-                borderWidth: 3,
-                pointRadius: 2,
-                borderColor: "#cb0c9f",
-                backgroundColor: "transparent",
-                data: temperatureData,
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: true,
-                }
-            },
-            interaction: {
-                intersect: false,
-                mode: 'index',
-            },
-            scales: {
-                y: {
-                    grid: {
-                        drawBorder: false,
-                        display: true,
-                        drawOnChartArea: true,
-                        drawTicks: false,
-                        borderDash: [5, 5]
-                    },
-                    ticks: {
-                        display: true,
-                        padding: 10,
-                        color: '#b2b9bf',
-                        font: {
-                            size: 11,
-                            family: "Inter",
-                            style: 'normal',
-                            lineHeight: 2
-                        },
-                    }
-                },
-                x: {
-                    grid: {
-                        drawBorder: false,
-                        display: false,
-                        drawOnChartArea: false,
-                        drawTicks: false,
-                    },
-                    ticks: {
-                        display: true,
-                        color: '#b2b9bf',
-                        padding: 20,
-                        font: {
-                            size: 11,
-                            family: "Inter",
-                            style: 'normal',
-                            lineHeight: 2
-                        },
-                    }
-                },
-            },
-        },
-    });
-  </script>
-  <script>
-    // Agregar funcionalidad al botón de actualizar gráfico
-    document.addEventListener('DOMContentLoaded', function() {
-      document.getElementById('chart-refresh').addEventListener('click', function() {
-        if (window.sensorMonitor && window.sensorMonitor.temperatureWeightChart) {
-          window.sensorMonitor.temperatureWeightChart.destroy();
-          window.sensorMonitor.createCharts();
-          console.log("Gráfico reiniciado");
-        }
-      });
-    });
-
     var win = navigator.platform.indexOf('Win') > -1;
     if (win && document.querySelector('#sidenav-scrollbar')) {
       var options = {
