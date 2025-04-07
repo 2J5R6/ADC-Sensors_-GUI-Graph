@@ -75,7 +75,11 @@ let systemState = {
 };
 
 // Configuración WebSocket simple
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ 
+  server,
+  path: '/', // Path explícito
+  perMessageDeflate: false // Desactivar compresión para evitar problemas
+});
 
 // Función para enviar un comando al puerto serial
 function sendCommand(port, command) {
@@ -172,21 +176,15 @@ function openSerialPort() {
           const intensityText = data.substring(5).trim();
           const intensityValue = parseFloat(intensityText);
           
-          console.log(`Procesando dato de intensidad: ${intensityText}`);
+          console.log(`Procesando dato de intensidad: "${intensityText}" => ${intensityValue}`);
           
           if (!isNaN(intensityValue)) {
             // Seguimos usando 'weight' como tipo para mantener compatibilidad
             sensorData = { type: 'weight', value: intensityValue };
             lastMessages.weight = sensorData;
             console.log(`Intensidad procesada: ${intensityValue}%`);
-            
-            // Enviar dato específicamente a todos los clientes para asegurar recepción
-            const dataStr = JSON.stringify(sensorData);
-            for (const client of connections) {
-              if (client.readyState === WebSocket.OPEN) {
-                client.send(dataStr);
-              }
-            }
+          } else {
+            console.error(`Error al convertir valor de intensidad: "${intensityText}"`);
           }
         }
         // Procesar confirmaciones de comandos
@@ -257,11 +255,17 @@ function openSerialPort() {
         
         // Enviar los datos a todos los clientes conectados si hay datos válidos
         if (sensorData) {
-          for (const client of connections) {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(JSON.stringify(sensorData));
-            }
+          // Para depuración
+          if (sensorData.type === 'weight') {
+            console.log(`Enviando dato de intensidad a ${connections.size} cliente(s): ${JSON.stringify(sensorData)}`);
           }
+          
+          const dataStr = JSON.stringify(sensorData);
+          connections.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+              client.send(dataStr);
+            }
+          });
         }
       } catch (err) {
         console.error('Error al procesar datos:', err);
@@ -287,9 +291,16 @@ function openSerialPort() {
 let serialConnection = openSerialPort();
 
 // Manejar conexiones WebSocket
-wss.on('connection', (ws) => {
-  console.log('Cliente conectado');
+wss.on('connection', (ws, req) => {
+  const clientIp = req.socket.remoteAddress;
+  console.log(`Cliente conectado desde ${clientIp}`);
   connections.add(ws);
+  
+  // Enviar confirmación de conexión exitosa
+  ws.send(JSON.stringify({
+    type: 'confirmation',
+    message: 'CONNECTION_OK'
+  }));
   
   // Enviar estado actual al nuevo cliente
   ws.send(JSON.stringify({
@@ -308,25 +319,21 @@ wss.on('connection', (ws) => {
     console.log('Enviando último valor de peso al nuevo cliente');
   }
   
-  // Enviar confirmación de conexión
-  ws.send(JSON.stringify({
-    type: 'confirmation',
-    message: 'CONNECTION_OK'
-  }));
-  
   // Manejar comandos desde el frontend
   ws.on('message', (message) => {
     try {
-      const data = JSON.parse(message);
+      const data = JSON.parse(message.toString()); // Asegurarnos que sea string
       
       if (data.command && serialConnection && serialConnection.port) {
         // Comandos simples (a, b) enviados tal cual
         const cmd = data.command.trim();
+        console.log(`Recibido comando del cliente: ${cmd}`);
         
         // Para los comandos a/b, enviar una sola vez para evitar problemas
         if (cmd === 'a' || cmd === 'b') {
           sendCommand(serialConnection.port, cmd)
             .then(() => {
+              console.log(`Comando ${cmd} ejecutado correctamente`);
               // Si el comando es b (detener), esperar y verificar estado
               if (cmd === 'b') {
                 setTimeout(() => {

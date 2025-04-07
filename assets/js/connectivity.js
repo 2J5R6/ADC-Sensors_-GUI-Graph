@@ -2,7 +2,7 @@
 (() => {
   // Variables de control
   let connectionAttempts = 0;
-  const MAX_RETRY = 5;
+  const MAX_RETRY = 10;
   let reconnectTimer = null;
 
   // Función para verificar el estado de la conexión

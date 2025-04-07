@@ -101,5 +101,25 @@ document.addEventListener('DOMContentLoaded', function() {
       return value.toFixed(2);
     };
     
+    // Opcionalmente, iniciar simulación automática
+    let simInterval = null;
+    
+    // Función para iniciar/detener simulación automática
+    window.toggleSimulation = (interval = 2000) => {
+      if (simInterval) {
+        clearInterval(simInterval);
+        simInterval = null;
+        console.log('Simulación automática detenida');
+        return false;
+      } else {
+        simInterval = setInterval(() => {
+          window.simTemp();
+          window.simIntensity();
+        }, interval);
+        console.log(`Simulación automática iniciada (${interval}ms)`);
+        return true;
+      }
+    };
+    
   }, 1000); // Esperar 1 segundo para asegurar que todo está cargado
 });

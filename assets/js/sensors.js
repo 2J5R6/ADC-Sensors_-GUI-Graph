@@ -56,77 +56,84 @@ class SensorMonitor {
     // Determinar la URL WebSocket basada en la URL actual
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.hostname || 'localhost';
-    // SIEMPRE usar el puerto 3000 donde está el servidor
-    const wsUrl = `${protocol}//${host}:3000`;
+    // Usar puerto específico (3000) para el servidor WebSocket
+    const port = 3000;
+    const wsUrl = `${protocol}//${host}:${port}`;
     
-    this.log(`Conectando a WebSocket: ${wsUrl}`);
+    this.log(`Intentando conexión WebSocket a: ${wsUrl}`);
     
-    this.ws = new WebSocket(wsUrl);
-    
-    this.ws.onopen = () => {
-      this.log('Conexión WebSocket establecida');
-      this.updateStatus('Conectado al servidor');
-      document.getElementById('status-dot').classList.remove('status-disconnected');
-      document.getElementById('status-dot').classList.add('status-connected');
+    try {
+      this.ws = new WebSocket(wsUrl);
       
-      // Habilitar controles
-      document.querySelectorAll('.sensor-control').forEach(el => el.disabled = false);
-      
-      // Solicitar estado actual al conectar
-      this.sendCommand('STATUS');
-    };
-    
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        this.log('Mensaje recibido:', data);
+      this.ws.onopen = () => {
+        this.log('✅ Conexión WebSocket establecida correctamente');
+        this.updateStatus('Conectado al servidor');
+        document.getElementById('status-dot').classList.remove('status-disconnected');
+        document.getElementById('status-dot').classList.add('status-connected');
         
-        // Manejar diferentes tipos de datos
-        switch (data.type) {
-          case 'temperature':
-            this.processTemperatureData(data);
-            break;
-            
-          case 'weight':
-            this.processWeightData(data);
-            break;
-            
-          case 'status':
-            this.processSystemStatus(data);
-            break;
-            
-          case 'confirmation':
-            this.processConfirmation(data);
-            break;
-            
-          default:
-            this.log(`Mensaje de tipo desconocido: ${data.type}`);
+        // Habilitar controles
+        document.querySelectorAll('.sensor-control').forEach(el => el.disabled = false);
+        
+        // Solicitar estado actual al conectar
+        this.sendCommand('STATUS');
+      };
+      
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          this.log('Mensaje recibido:', data);
+          
+          // Manejar diferentes tipos de datos
+          switch (data.type) {
+            case 'temperature':
+              this.processTemperatureData(data);
+              break;
+              
+            case 'weight':
+              this.processWeightData(data);
+              break;
+              
+            case 'status':
+              this.processSystemStatus(data);
+              break;
+              
+            case 'confirmation':
+              this.processConfirmation(data);
+              break;
+              
+            default:
+              this.log(`Mensaje de tipo desconocido: ${data.type}`);
+          }
+        } catch (e) {
+          console.error('Error al procesar mensaje:', e);
         }
-      } catch (e) {
-        console.error('Error al procesar mensaje:', e);
-      }
-    };
-    
-    this.ws.onclose = () => {
-      this.log('Conexión WebSocket cerrada');
-      this.updateStatus('Desconectado del servidor. Intentando reconectar...');
-      document.getElementById('status-dot').classList.remove('status-connected');
-      document.getElementById('status-dot').classList.add('status-disconnected');
+      };
       
-      // Deshabilitar controles
-      document.querySelectorAll('.sensor-control').forEach(el => el.disabled = true);
+      this.ws.onclose = () => {
+        this.log('Conexión WebSocket cerrada');
+        this.updateStatus('Desconectado del servidor. Intentando reconectar...');
+        document.getElementById('status-dot').classList.remove('status-connected');
+        document.getElementById('status-dot').classList.add('status-disconnected');
+        
+        // Deshabilitar controles
+        document.querySelectorAll('.sensor-control').forEach(el => el.disabled = true);
+        
+        // Intentar reconectar
+        setTimeout(() => {
+          this.log('Intentando reconexión automática...');
+          this.initWebSocket();
+        }, 3000);
+      };
       
-      // Intentar reconectar
-      setTimeout(() => {
-        this.log('Intentando reconexión automática...');
-        this.initWebSocket();
-      }, 3000);
-    };
-    
-    this.ws.onerror = (error) => {
-      console.error('Error en WebSocket:', error);
-      this.updateStatus('Error de conexión. Reintentando...');
-    };
+      this.ws.onerror = (error) => {
+        console.error('Error en WebSocket:', error);
+        this.updateStatus('Error de conexión. Reintentando...');
+      };
+    } catch (e) {
+      this.log(`❌ Error al crear conexión WebSocket: ${e.message}`);
+      // Intentar reconexión automática después de un tiempo
+      setTimeout(() => this.initWebSocket(), 5000);
+    }
   }
   
   // Procesar datos de temperatura
@@ -178,14 +185,17 @@ class SensorMonitor {
     }
     this.lastWeightTimestamp = now;
     
-    // Asegurar que el valor es numérico
-    const intensityValue = parseFloat(data.value);
+    // Asegurar que el valor es numérico y está en el rango adecuado
+    let intensityValue = parseFloat(data.value);
     if (!isNaN(intensityValue)) {
+      // Normalizar el valor como porcentaje si es necesario
+      if (intensityValue > 100) intensityValue = 100;
+      if (intensityValue < 0) intensityValue = 0;
+      
       // Actualizar valor en pantalla (mostrar como porcentaje)
       document.getElementById('weight-value').textContent = `${intensityValue.toFixed(2)} %`;
       
-      // Añadir al gráfico independientemente del estado de adquisición
-      // para pruebas y asegurar que se visualiza correctamente
+      // Añadir al gráfico
       this.addSensorData('weight', intensityValue);
       
       this.log(`Valor de intensidad actualizado: ${intensityValue}`);
@@ -241,59 +251,81 @@ class SensorMonitor {
   // Procesar mensaje de confirmación
   processConfirmation(data) {
     this.updateStatus(`Respuesta: ${data.message}`);
-    this.log(`Confirmación: ${data.message}`);
+    this.log(`Confirmación recibida: ${data.message}`);
     
     if (data.message === 'OK:a') {
       this.isRunning = true;
       this.updateAcquisitionButtonState();
       this.log('Sistema de adquisición ACTIVADO');
     } 
-    else if (data.message === 'OK:b') { con un retraso mayor
+    else if (data.message === 'OK:b') {
       this.isRunning = false;
       this.updateAcquisitionButtonState();
       this.log('Sistema de adquisición DETENIDO');
       
-      // Si hay configuración pendiente, aplicarla // Aumentar el tiempo de espera
+      // Si hay configuración pendiente, aplicarla
       if (Object.keys(this.pendingConfig).length > 0) {
         this.log('Aplicando configuración pendiente después de detener adquisición');
-        setTimeout(() => { else if (data.message === 'CONNECTION_OK') {
-          this.applyPendingConfig();    // Al recibir confirmación de conexión, solicitar estado actual
-        }, 1000);
-      };
+        setTimeout(() => {
+          this.applyPendingConfig();
+        }, 1500);
+      }
+    }
+    else if (data.message === 'CONNECTION_OK') {
+      // Al recibir confirmación de conexión, solicitar estado actual
+      this.log('Conexión confirmada por el servidor');
+      setTimeout(() => {
+        this.sendCommand('STATUS');
+      }, 500);
     }
   }
   
   // Actualizar estado del botón de adquisición
-  updateAcquisitionButtonState() {sición
-    const button = document.getElementById('toggle-acquisition');isitionButtonState() {
-    if (this.isRunning) {e-acquisition');
+  updateAcquisitionButtonState() {
+    const button = document.getElementById('toggle-acquisition');
+    if (this.isRunning) {
       button.textContent = 'Detener Adquisición';
-      button.classList.remove('btn-success');ición';
-      button.classList.add('btn-danger'); button.classList.remove('btn-success');
-    } else {   button.classList.add('btn-danger');
-      button.textContent = 'Iniciar Adquisición';  } else {
-      button.classList.remove('btn-danger');isición';
-      button.classList.add('btn-success');ist.remove('btn-danger');
-    }-success');
+      button.classList.remove('btn-success');
+      button.classList.add('btn-danger');
+    } else {
+      button.textContent = 'Iniciar Adquisición';
+      button.classList.remove('btn-danger');
+      button.classList.add('btn-success');
+    }
   }
   
   // Configurar controles de la interfaz
-  setupControls() {a interfaz
-    // Botón de iniciar/deteners() {
+  setupControls() {
+    // Botón de iniciar/detener
     document.getElementById('toggle-acquisition').addEventListener('click', () => {
-      if (this.isRunning) {addEventListener('click', () => {
+      if (this.isRunning) {
         this.log('Enviando comando STOP (b)');
-        this.sendCommand('b');do STOP (b)');
-      } else {his.sendCommand('b');
+        this.sendCommand('b');
+        
+        // Actualizar inmediatamente el estado del botón para feedback visual
+        this.isRunning = false;
+        this.updateAcquisitionButtonState();
+        this.updateStatus('Deteniendo adquisición...');
+        
+        // Solicitar estado después de un breve retraso para confirmar que se detuvo
+        setTimeout(() => {
+          this.sendCommand('STATUS');
+        }, 1000);
+      } else {
         this.log('Enviando comando START (a)');
-        // Solo limpiar gráfico si no está pausado // Actualizar inmediatamente el estado del botón para feedback visual
-        if (!this.isPaused) { this.isRunning = false;
-          this.clearChartData();    this.updateAcquisitionButtonState();
+        // Solo limpiar gráfico si no está pausado
+        if (!this.isPaused) {
+          this.clearChartData();
         }
-        this.sendCommand('a');detuvo
+        this.sendCommand('a');
+        
+        // Actualizar inmediatamente el estado del botón para feedback visual
+        this.isRunning = true;
+        this.updateAcquisitionButtonState();
+        this.updateStatus('Iniciando adquisición...');
       }
     });
-      }, 500);
+    
     // Botón para pausar/continuar gráfica (solo afecta la visualización, no la adquisición)
     document.getElementById('chart-refresh').addEventListener('click', () => {
       this.isPaused = !this.isPaused;
@@ -302,196 +334,196 @@ class SensorMonitor {
       if (this.isPaused) {
         btn.innerHTML = '<i class="fas fa-play me-1"></i> Continuar gráfica';
         btn.classList.remove('btn-outline-danger');
-        btn.classList.add('btn-outline-success');el botón para feedback visual
+        btn.classList.add('btn-outline-success');
         this.log('Gráfica PAUSADA');
-      } else { this.updateAcquisitionButtonState();
+      } else {
         btn.innerHTML = '<i class="fas fa-pause me-1"></i> Detener gráfica';
-        btn.classList.remove('btn-outline-success');});
+        btn.classList.remove('btn-outline-success');
         btn.classList.add('btn-outline-danger');
-        this.log('Gráfica CONTINUADA');uisición)
-      }addEventListener('click', () => {
-    });
-    getElementById('chart-refresh');
-    // Controles para tiempos de muestreo
-    document.getElementById('temp-sample-time').addEventListener('change', (e) => {f (this.isPaused) {
-      const value = parseInt(e.target.value);lay me-1"></i> Continuar gráfica';
-      if (isNaN(value) || value <= 0) { btn.classList.remove('btn-outline-danger');
-        e.target.value = 1;    btn.classList.add('btn-outline-success');
-        return;
+        this.log('Gráfica CONTINUADA');
       }
-      this.handleConfigChange('T1', value);fa-pause me-1"></i> Detener gráfica';
-    });e('btn-outline-success');
-    ssList.add('btn-outline-danger');
-    document.getElementById('weight-sample-time').addEventListener('change', (e) => { this.log('Gráfica CONTINUADA');
+    });
+    
+    // Controles para tiempos de muestreo
+    document.getElementById('temp-sample-time').addEventListener('change', (e) => {
       const value = parseInt(e.target.value);
       if (isNaN(value) || value <= 0) {
         e.target.value = 1;
-        return;streo
-      }e) => {
+        return;
+      }
+      this.handleConfigChange('T1', value);
+    });
+    
+    document.getElementById('weight-sample-time').addEventListener('change', (e) => {
+      const value = parseInt(e.target.value);
+      if (isNaN(value) || value <= 0) {
+        e.target.value = 1;
+        return;
+      }
       this.handleConfigChange('T2', value);
-    });e <= 0) {
-     e.target.value = 1;
-    // Control para unidad de tiempo    return;
+    });
+    
+    // Control para unidad de tiempo
     document.getElementById('time-unit').addEventListener('change', (e) => {
       this.handleConfigChange('TU', e.target.value);
       this.updateTimeLabels();
     });
-    cument.getElementById('weight-sample-time').addEventListener('change', (e) => {
+    
     // Controles para filtros
     document.getElementById('temp-filter').addEventListener('change', (e) => {
-      const isChecked = e.target.checked ? 1 : 0; e.target.value = 1;
-      this.handleConfigChange('FT', isChecked);    return;
+      const isChecked = e.target.checked ? 1 : 0;
+      this.handleConfigChange('FT', isChecked);
       
       // Habilitar/deshabilitar selector de muestras
       document.getElementById('temp-filter-samples').disabled = !e.target.checked;
     });
     
     document.getElementById('weight-filter').addEventListener('change', (e) => {
-      const isChecked = e.target.checked ? 1 : 0;his.handleConfigChange('TU', e.target.value);
-      this.handleConfigChange('FP', isChecked);  this.updateTimeLabels();
+      const isChecked = e.target.checked ? 1 : 0;
+      this.handleConfigChange('FP', isChecked);
       
       // Habilitar/deshabilitar selector de muestras
       document.getElementById('weight-filter-samples').disabled = !e.target.checked;
-    });addEventListener('change', (e) => {
-    onst isChecked = e.target.checked ? 1 : 0;
-    // Controles para número de muestras en filtros  this.handleConfigChange('FT', isChecked);
-    document.getElementById('temp-filter-samples').addEventListener('change', (e) => {
-      const value = e.target.value;ector de muestras
-      this.handleConfigChange('ST', value);samples').disabled = !e.target.checked;
     });
     
-    document.getElementById('weight-filter-samples').addEventListener('change', (e) => { => {
+    // Controles para número de muestras en filtros
+    document.getElementById('temp-filter-samples').addEventListener('change', (e) => {
       const value = e.target.value;
-      this.handleConfigChange('SP', value);   this.handleConfigChange('FP', isChecked);
-    });    
-    tor de muestras
-    // Inicialmente deshabilitar controles hasta que se establezca conexiónfilter-samples').disabled = !e.target.checked;
+      this.handleConfigChange('ST', value);
+    });
+    
+    document.getElementById('weight-filter-samples').addEventListener('change', (e) => {
+      const value = e.target.value;
+      this.handleConfigChange('SP', value);
+    });
+    
+    // Inicialmente deshabilitar controles hasta que se establezca conexión
     document.querySelectorAll('.sensor-control').forEach(el => el.disabled = true);
   }
   
-  // Manejar cambios de configuraciónId('temp-filter-samples').addEventListener('change', (e) => {
+  // Manejar cambios de configuración
   handleConfigChange(setting, value) {
     this.log(`Cambiando configuración ${setting} a ${value}`);
     
     // Si estamos adquiriendo datos, primero detener y luego aplicar la configuración
-    if (this.isRunning) {s').addEventListener('change', (e) => {
+    if (this.isRunning) {
       this.pendingConfig[setting] = value;
-      this.log('Deteniendo adquisición para aplicar nueva configuración...'); this.handleConfigChange('SP', value);
-      this.sendCommand('b'); // Detener adquisición });
-    } else {  
-      // Si ya está detenido, enviar directamentetroles hasta que se establezca conexión
-      this.sendCommand(`${setting}:${value}`);orAll('.sensor-control').forEach(el => el.disabled = true);
+      this.log('Deteniendo adquisición para aplicar nueva configuración...');
+      this.sendCommand('b'); // Detener adquisición
+    } else {
+      // Si ya está detenido, enviar directamente
+      this.sendCommand(`${setting}:${value}`);
     }
   }
   
   // Aplicar configuración pendiente
-  applyPendingConfig() {setting} a ${value}`);
+  applyPendingConfig() {
     if (Object.keys(this.pendingConfig).length === 0) return;
-    aplicar la configuración
+    
     // Enviar cada comando de configuración con una pequeña pausa entre ellos
     const commands = Object.entries(this.pendingConfig);
-    const sendNextCommand = (index) => {sición para aplicar nueva configuración...');
-      if (index >= commands.length) {mmand('b'); // Detener adquisición
-        // Todos los comandos enviados, reiniciar adquisiciónse {
-        setTimeout(() => {tamente
-          this.log('Reiniciando adquisición después de aplicar configuración');g}:${value}`);
+    const sendNextCommand = (index) => {
+      if (index >= commands.length) {
+        // Todos los comandos enviados, reiniciar adquisición
+        setTimeout(() => {
+          this.log('Reiniciando adquisición después de aplicar configuración');
           this.sendCommand('a');
         }, 1000);
         
         // Limpiar configuración pendiente
         this.pendingConfig = {};
-        return; (Object.keys(this.pendingConfig).length === 0) return;
+        return;
       }
-      eña pausa entre ellos
-      const [setting, value] = commands[index];nst commands = Object.entries(this.pendingConfig);
-      this.sendCommand(`${setting}:${value}`);const sendNextCommand = (index) => {
-      h) {
-      // Enviar siguiente comando después de una pausaiar adquisición
-      setTimeout(() => sendNextCommand(index + 1), 500);     setTimeout(() => {
-    };        this.log('Reiniciando adquisición después de aplicar configuración');
+      
+      const [setting, value] = commands[index];
+      this.sendCommand(`${setting}:${value}`);
+      
+      // Enviar siguiente comando después de una pausa
+      setTimeout(() => sendNextCommand(index + 1), 500);
+    };
     
     // Comenzar a enviar comandos
     setTimeout(() => sendNextCommand(0), 500);
-  }figuración pendiente
-  fig = {};
-  // Actualizar etiquetas de tiempo    return;
+  }
+  
+  // Actualizar etiquetas de tiempo
   updateTimeLabels() {
     const timeUnit = document.getElementById('time-unit').value;
-    let unitText = '';lue] = commands[index];
-    let multiplier = 1;`${setting}:${value}`);
+    let unitText = '';
+    let multiplier = 1;
     
-    switch (timeUnit) { siguiente comando después de una pausa
-      case 'm':tCommand(index + 1), 500);
+    switch (timeUnit) {
+      case 'm':
         unitText = 'ms';
         multiplier = 1;
-        break; a enviar comandos
-      case 's':Command(0), 500);
+        break;
+      case 's':
         unitText = 'segundos';
         multiplier = 1000;
-        break;Actualizar etiquetas de tiempo
-      case 'M':dateTimeLabels() {
+        break;
+      case 'M':
         unitText = 'minutos';
         multiplier = 60000;
-        break;let multiplier = 1;
+        break;
     }
     
-    const tempTime = parseInt(document.getElementById('temp-sample-time').value) * multiplier;   case 'm':
-    const weightTime = parseInt(document.getElementById('weight-sample-time').value) * multiplier;      unitText = 'ms';
+    const tempTime = parseInt(document.getElementById('temp-sample-time').value) * multiplier;
+    const weightTime = parseInt(document.getElementById('weight-sample-time').value) * multiplier;
     
     document.getElementById('temp-actual-time').textContent = `${tempTime} ${unitText}`;
     document.getElementById('weight-actual-time').textContent = `${weightTime} ${unitText}`;
   }
-  ;
+  
   // Limpiar datos del gráfico
-  clearChartData() {  case 'M':
-    this.log('Limpiando datos del gráfico');inutos';
+  clearChartData() {
+    this.log('Limpiando datos del gráfico');
     this.temperatureData = [];
     this.weightData = [];
     this.timeLabels = [];
     
-    if (this.chart) {onst tempTime = parseInt(document.getElementById('temp-sample-time').value) * multiplier;
-      this.chart.data.labels = []; const weightTime = parseInt(document.getElementById('weight-sample-time').value) * multiplier;
-      this.chart.data.datasets[0].data = [];  
-      this.chart.data.datasets[1].data = [];ementById('temp-actual-time').textContent = `${tempTime} ${unitText}`;
-      this.chart.update();lementById('weight-actual-time').textContent = `${weightTime} ${unitText}`;
+    if (this.chart) {
+      this.chart.data.labels = [];
+      this.chart.data.datasets[0].data = [];
+      this.chart.data.datasets[1].data = [];
+      this.chart.update();
     }
   }
   
-  // Crear gráficoata() {
-  createChart() {his.log('Limpiando datos del gráfico');
-    const ctx = document.getElementById('chart-line');this.temperatureData = [];
+  // Crear gráfico
+  createChart() {
+    const ctx = document.getElementById('chart-line');
     if (!ctx) {
       console.error('No se encontró el elemento canvas para el gráfico');
       return;
     }
-    ta.labels = [];
+    
     // Destruir gráfico existente si existe
-    if (window.chartLine) {his.chart.data.datasets[1].data = [];
+    if (window.chartLine) {
       try {
         window.chartLine.destroy();
       } catch(e) { 
         console.log("Error al destruir chartLine:", e);
-      } Crear gráfico
+      }
       delete window.chartLine;
-    }ument.getElementById('chart-line');
-     {
-    this.log('Creando gráfico...');('No se encontró el elemento canvas para el gráfico');
+    }
+    
+    this.log('Creando gráfico...');
     
     this.chart = new Chart(ctx, {
       type: 'line',
-      data: {co existente si existe
+      data: {
         labels: [],
         datasets: [
-          {stroy();
+          {
             label: 'Temperatura (°C)',
-            data: [],Line:", e);
+            data: [],
             borderColor: '#cb0c9f',
-            backgroundColor: 'rgba(203,12,159,0.2)',rtLine;
+            backgroundColor: 'rgba(203,12,159,0.2)',
             borderWidth: 2,
             pointRadius: 3,
-            pointBackgroundColor: '#cb0c9f',('Creando gráfico...');
+            pointBackgroundColor: '#cb0c9f',
             pointBorderColor: 'white',
-            fill: true,, {
+            fill: true,
             tension: 0.4,
             yAxisID: 'y-temperature'
           },
@@ -499,39 +531,39 @@ class SensorMonitor {
             label: 'Intensidad de Rojo (%)',
             data: [],
             borderColor: '#f5365c',
-            backgroundColor: 'rgba(245,54,92,0.2)',: '#cb0c9f',
-            borderWidth: 2,or: 'rgba(203,12,159,0.2)',
+            backgroundColor: 'rgba(245,54,92,0.2)',
+            borderWidth: 2,
             pointRadius: 3,
-            pointBackgroundColor: '#f5365c', pointRadius: 3,
-            pointBorderColor: 'white',   pointBackgroundColor: '#cb0c9f',
-            fill: true,    pointBorderColor: 'white',
-            tension: 0.4,: true,
+            pointBackgroundColor: '#f5365c',
+            pointBorderColor: 'white',
+            fill: true,
+            tension: 0.4,
             yAxisID: 'y-weight'
-          }'
+          }
         ]
       },
-      options: {  label: 'Peso (g)',
-        responsive: true,[],
-        maintainAspectRatio: false,olor: '#3A416F',
-        animation: { 'rgba(58,65,111,0.2)',
-          duration: 0 // Desactivar animaciones para mejor rendimientoborderWidth: 2,
-        },ius: 3,
-        plugins: {dColor: '#3A416F',
-          legend: {: 'white',
-            position: 'top', fill: true,
-          },  tension: 0.4,
-          tooltip: {y-weight'
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: {
+          duration: 0 // Desactivar animaciones para mejor rendimiento
+        },
+        plugins: {
+          legend: {
+            position: 'top',
+          },
+          tooltip: {
             mode: 'index',
             intersect: false
           }
         },
         interaction: {
-          mode: 'index',: false,
+          mode: 'index',
           intersect: false
-        },0 // Desactivar animaciones para mejor rendimiento
+        },
         scales: {
           'y-temperature': {
-            type: 'linear',nd: {
+            type: 'linear',
             position: 'left',
             title: {
               display: true,
@@ -540,115 +572,111 @@ class SensorMonitor {
             beginAtZero: false
           },
           'y-weight': {
-            type: 'linear',: 'index',
-            position: 'right',: false
+            type: 'linear',
+            position: 'right',
             title: {
-              display: true,: {
+              display: true,
               text: 'Intensidad de Rojo (%)'
-            },type: 'linear',
-            grid: {sition: 'left',
+            },
+            grid: {
               drawOnChartArea: false
             },
-            beginAtZero: truetura (°C)'
-          },,
-          x: { beginAtZero: false
-            title: { },
-              display: true,   'y-weight': {
-              text: 'Tiempo'     type: 'linear',
-            }        position: 'right',
+            beginAtZero: true
+          },
+          x: {
+            title: {
+              display: true,
+              text: 'Tiempo'
+            }
           }
-        }           display: true,
-      }            text: 'Peso (g)'
+        }
+      }
     });
     
     this.log('Gráfico creado correctamente');
-  }        },
+  }
   
-  // Añadir nuevos datos a la gráfica - Versión simplificada
+  // Añadir nuevos datos a la gráfica
   addSensorData(type, value) {
+    // Usar la misma marca de tiempo para datos que llegan casi simultáneamente
     const now = new Date().toLocaleTimeString();
+    let addNewLabel = true;
     
-    // Crear una nueva entrada para cada dato para asegurar visualización correcta        text: 'Tiempo'
-    this.timeLabels.push(now);
-        }
-    if (type === 'temperature') {
-      this.temperatureData.push(value);
+    // Si hay etiquetas y el último dato es muy reciente (menos de 500ms)
+    if (this.timeLabels.length > 0 && 
+        Date.now() - Math.max(this.lastTempTimestamp, this.lastWeightTimestamp) < 500) {
+      // No agregar nueva etiqueta de tiempo
+      addNewLabel = false;
+    }
+    
+    if (addNewLabel) {
+      this.timeLabels.push(now);
+      // Agregar valores nulos para mantener sincronizados los arrays
+      this.temperatureData.push(null);
       this.weightData.push(null);
+    }
+    
+    // Índice del punto de datos actual (el último)
+    const currentIndex = this.timeLabels.length - 1;
+    
+    // Actualizar el valor según el tipo
+    if (type === 'temperature') {
+      this.temperatureData[currentIndex] = value;
       this.log(`Dato de temperatura añadido: ${value}°C`);
     } 
     else if (type === 'weight') {
-      this.temperatureData.push(null);
-      this.weightData.push(value);
+      this.weightData[currentIndex] = value;
       this.log(`Dato de intensidad añadido: ${value}%`);
-    }new Date().toLocaleTimeString();
+    }
     
     // Limitar cantidad de datos
     while (this.timeLabels.length > this.maxDataPoints) {
       this.timeLabels.shift();
-      this.temperatureData.shift();s.temperatureData.push(value);
-      this.weightData.shift();ghtData.push(null); // Sin dato de peso para este instante
+      this.temperatureData.shift();
+      this.weightData.shift();
     }
-    eratura: ${value}°C`);
-    // Solo actualizar gráfico si hay datos
-    if (this.chart && this.timeLabels.length > 0) {
-      this.updateChart();/ Para datos de peso
-    }// Usar la última etiqueta de tiempo si existe
+    
+    // Solo actualizar gráfico si hay datos y no está pausado
+    if (this.chart && this.timeLabels.length > 0 && !this.isPaused) {
+      this.updateChart();
+    }
   }
-     const lastTime = this.timeLabels[this.timeLabels.length - 1];
-  // Actualizar gráfico    
-  updateChart() {esa misma etiqueta
+  
+  // Actualizar gráfico
+  updateChart() {
     if (!this.chart) return;
-    .weightData.length - 1] = value;
     try {
       // Actualizar datos del gráfico, agregar nueva etiqueta
-      this.chart.data.labels = [...this.timeLabels];     this.timeLabels.push(now);
-      this.chart.data.datasets[0].data = [...this.temperatureData];      this.temperatureData.push(null);
-      this.chart.data.datasets[1].data = [...this.weightData];ta.push(value);
-           }
-      // Actualizar sin animación para mejor rendimiento    } else {
-      this.chart.update('none');iquetas, crear una
-    } catch (error) {Labels.push(now);
-      console.error("Error al actualizar gráfico:", error);.push(null);
-    }    this.weightData.push(value);
+      this.chart.data.labels = [...this.timeLabels];
+      this.chart.data.datasets[0].data = [...this.temperatureData];
+      this.chart.data.datasets[1].data = [...this.weightData];
+      
+      // Actualizar sin animación para mejor rendimiento
+      this.chart.update('none');
+    } catch (error) {
+      console.error("Error al actualizar gráfico:", error);
+    }
   }
   
   // Enviar comando a través de WebSocket
   sendCommand(command) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const msg = JSON.stringify({ command: command }); Limitar cantidad de datos
-      this.ws.send(msg);{
+      const msg = JSON.stringify({ command: command });
+      this.ws.send(msg);
       this.log(`Comando enviado: ${command}`);
-      this.updateStatus(`Comando enviado: ${command}`);eData.shift();
+      this.updateStatus(`Comando enviado: ${command}`);
       return true;
     } else {
       this.updateStatus('Error: No hay conexión con el servidor'); 
-      this.log('No se pudo enviar comando, sin conexión WebSocket');  this.updateChart();
+      this.log('No se pudo enviar comando, sin conexión WebSocket');
       return false;
     }
   }
   
-  // Actualizar mensaje de estadourn;
+  // Actualizar mensaje de estado
   updateStatus(message) {
     const statusElement = document.getElementById('connection-status');
-    if (statusElement) {r datos del gráfico
-      statusElement.textContent = message;hart.data.labels = [...this.timeLabels];
-    };
-  }
-}
- // Actualizar sin animación para mejor rendimiento
-// Inicializar cuando el DOM esté listo   this.chart.update('none');
-document.addEventListener('DOMContentLoaded', function() {  } catch (error) {
-  console.log('Inicializando sistema de monitoreo de sensores...');ualizar gráfico:", error);
-  
-  // Limpiar variables globales que puedan interferir
-  window.chartLine = undefined;
-  window.temperatureData = undefined;
-  window.weightData = undefined;dCommand(command) {
-  window.timeLabels = undefined; if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-       const msg = JSON.stringify({ command: command });
-  // Inicializar el nuevo monitor de sensores      this.ws.send(msg);
-  window.sensorMonitor = new SensorMonitor();and}`);
-});
+    if (statusElement) {
       statusElement.textContent = message;
     }
   }
