@@ -357,3 +357,189 @@ Detecta la pulsación del botón y controla el flag de adquisición.
 
 - [STM32F7 Reference Manual](https://www.st.com/resource/en/reference_manual/dm00124865-stm32f75xxx-and-stm32f74xxx-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf)
 - [STM32F7 Datasheet](https://www.st.com/resource/en/datasheet/stm32f767zi.pdf)
+
+# Sistema de Adquisición de Datos de Sensores STM32 - Backend
+
+Este sistema permite monitorizar en tiempo real datos de sensores conectados a un microcontrolador STM32F7, visualizar los datos en una interfaz web y ajustar parámetros de adquisición remotamente.
+
+## Arquitectura del Sistema
+
+El sistema consta de tres partes principales:
+
+1. **Firmware STM32** (`Sensores.cpp`): Controla la adquisición de datos desde los sensores y la comunicación serie.
+2. **Servidor Backend** (`server.js`): Actúa como puente entre la STM32 y la interfaz web.
+3. **Interfaz Web** (`dashboard.html`, `sensors.js`): Muestra los datos y permite configurar la adquisición.
+
+## Configuración del Backend
+
+### Requisitos previos
+
+- Node.js (v14 o superior)
+- npm (incluido con Node.js)
+
+### Variables de Entorno
+
+El archivo `.env` contiene la configuración del backend:
+
+```
+SERIAL_PORT=COM3       # Puerto COM donde está conectada la STM32
+BAUD_RATE=9600         # Velocidad de comunicación
+SERVER_PORT=3000       # Puerto del servidor web
+```
+
+> **NOTA**: Cambia `SERIAL_PORT` según el puerto COM asignado a tu placa STM32.
+
+### Instalación
+
+1. Navega al directorio del backend:
+   ```bash
+   cd c:\Users\julia\OneDrive\Escritorio\U.MILITAR\Semestre V - 2025\Micros\Teo\ProyectoCorteII_Segundo\ADC-Sensors_-GUI-Graph\BackEnd
+   ```
+
+2. Instala las dependencias:
+   ```bash
+   npm install
+   ```
+
+3. Inicia el servidor:
+   ```bash
+   npm start
+   ```
+
+## Funcionamiento del Backend
+
+### Conexión Serial
+
+El servidor establece una conexión serial con la STM32 usando el puerto y velocidad especificados en `.env`. Los mensajes recibidos por el puerto serial tienen el siguiente formato:
+
+- `TEMP:xx.xx` - Datos de temperatura (°C)
+- `PESO:xx.xx` - Datos de peso (g)
+- `OK:cmd:val` - Confirmación de comandos
+
+### Servidor WebSocket
+
+El backend crea un servidor WebSocket que:
+
+1. **Reenvía los datos** de la STM32 a todos los clientes web conectados
+2. **Recibe comandos** desde la interfaz web y los envía a la STM32
+
+### Manejo de Errores y Reconexión
+
+El servidor incluye:
+
+- Reintentos automáticos para conexión serial
+- Manejo de desconexiones
+- Mensajes de estado detallados
+
+### Endpoints API
+
+El servidor ofrece API REST adicionales:
+
+- `GET /api/status` - Devuelve información sobre el estado del servidor y conexiones
+- `POST /api/restart-serial` - Fuerza un reinicio de la conexión serial
+
+## Protocolo de Comunicación
+
+### Comandos desde la interfaz web a la STM32
+
+| Comando | Descripción | Formato |
+|---------|-------------|---------|
+| `a` | Iniciar adquisición | `a\r\n` |
+| `b` | Detener adquisición | `b\r\n` |
+| `T1:n` | Tiempo muestreo temperatura | `T1:5\r\n` |
+| `T2:n` | Tiempo muestreo peso | `T2:2\r\n` |
+| `TU:x` | Unidad de tiempo (m/s/M) | `TU:s\r\n` |
+| `FT:0/1` | Filtro temperatura ON/OFF | `FT:1\r\n` |
+| `FP:0/1` | Filtro peso ON/OFF | `FP:1\r\n` |
+| `ST:n` | Muestras filtro temperatura | `ST:10\r\n` |
+| `SP:n` | Muestras filtro peso | `SP:5\r\n` |
+
+### Datos enviados desde la STM32 a la interfaz web
+
+Los datos son enviados por el backend a la interfaz web en formato JSON:
+
+```json
+// Datos de temperatura
+{
+  "type": "temperature",
+  "value": 25.75
+}
+
+// Datos de peso
+{
+  "type": "weight",
+  "value": 350.48
+}
+
+// Confirmación de comandos
+{
+  "type": "confirmation",
+  "message": "OK:FT:1"
+}
+```
+
+## Integración con el Firmware STM32
+
+El firmware STM32 (Sensores.cpp) está configurado para:
+
+1. Adquirir datos de dos sensores analógicos:
+   - Temperatura (PT100) conectada al ADC2
+   - Peso (Celda de carga) conectada al ADC1
+
+2. Enviar los datos por UART3 (9600 baud):
+   - PD8: TX
+   - PD9: RX
+
+3. Responder a comandos para configurar:
+   - Frecuencia de muestreo independiente para cada sensor
+   - Unidad de tiempo (milisegundos, segundos, minutos)
+   - Filtro de promedio para cada sensor
+
+## Diagrama de Flujo de Datos
+
+```
++-----------+       UART       +------------+      WebSocket     +------------+
+|           |<--------------->|            |<------------------>|            |
+|  STM32F7  |    9600 baud    |  Backend   |    JSON data/cmds  |  Frontend  |
+|           |<--------------->|  (Node.js) |<------------------>|  (Browser) |
++-----------+                 +------------+                    +------------+
+```
+
+## Solución de Problemas
+
+### El servidor no puede conectarse al puerto serial
+
+1. Comprueba que la placa STM32 esté conectada
+2. Verifica el puerto COM correcto (Administrador de dispositivos en Windows)
+3. Actualiza el archivo `.env` con el puerto correcto
+4. Reinicia el servidor
+
+### Los datos no aparecen en el gráfico
+
+1. Verifica que el servidor backend esté funcionando
+2. Comprueba la consola del navegador para mensajes de error
+3. Asegúrate de haber hecho clic en "Iniciar Adquisición"
+
+### La conexión WebSocket falla
+
+1. Confirma que el servidor esté ejecutándose en el puerto correcto
+2. Verifica que no haya firewalls bloqueando la conexión WebSocket
+
+## Extensión del Sistema
+
+Para añadir más sensores:
+
+1. Actualiza `Sensores.cpp` para leer y enviar datos del nuevo sensor
+2. Modifica `server.js` para procesar el nuevo formato de datos
+3. Actualiza `sensors.js` para mostrar los nuevos datos en la interfaz
+
+## Licencia
+
+Este proyecto forma parte de las prácticas académicas de la Universidad Militar Nueva Granada.
+
+---
+
+Desarrollado por:
+- Daniel García Araque
+- Julián Rosas
+- Andres García
