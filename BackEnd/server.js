@@ -62,6 +62,34 @@ let lastMessages = {
   weight: null
 };
 
+// Función para enviar comandos a la STM32 con confirmación
+function sendSerialCommand(port, command, callback) {
+  if (!port) {
+    console.error("Puerto no disponible");
+    if (callback) callback(new Error("Puerto no disponible"));
+    return;
+  }
+
+  console.log(`Enviando comando: ${command}`);
+  port.write(command + '\r\n', (err) => {
+    if (err) {
+      console.error('Error al enviar comando:', err);
+      if (callback) callback(err);
+    } else {
+      console.log(`Comando enviado exitosamente: ${command}`);
+      if (callback) callback(null);
+    }
+  });
+}
+
+// Función para depurar la comunicación
+function debugSerial(msg, data) {
+  const debug = true; // Cambiar a false para desactivar mensajes de depuración
+  if (debug) {
+    console.log(`[DEBUG] ${msg}`, data || '');
+  }
+}
+
 // Función para abrir el puerto serial
 function openSerialPort() {
   let port;
@@ -85,11 +113,19 @@ function openSerialPort() {
     // Manejar apertura del puerto
     port.on('open', () => {
       console.log(`Puerto serie ${SERIAL_PORT} conectado a ${BAUD_RATE} baudios`);
+      
+      // Enviar configuración inicial al dispositivo
+      setTimeout(() => {
+        console.log("Enviando configuración inicial...");
+        sendSerialCommand(port, "TU:s", () => {}); // Configurar unidad de tiempo a segundos
+        sendSerialCommand(port, "T1:1", () => {}); // Tiempo de muestreo temperatura = 1
+        sendSerialCommand(port, "T2:1", () => {}); // Tiempo de muestreo peso = 1
+      }, 2000);
     });
     
     // Procesar datos recibidos del puerto serie
     parser.on('data', (data) => {
-      console.log('Datos recibidos:', data);
+      debugSerial('Datos recibidos:', data);
       
       // Estructura para enviar los datos formateados
       let sensorData = null;
@@ -100,6 +136,7 @@ function openSerialPort() {
         if (!isNaN(tempValue)) {
           sensorData = { type: 'temperature', value: tempValue };
           lastMessages.temperature = sensorData;
+          debugSerial('Temperatura procesada:', tempValue);
         }
       } 
       // Procesar datos de peso
@@ -108,11 +145,13 @@ function openSerialPort() {
         if (!isNaN(weightValue)) {
           sensorData = { type: 'weight', value: weightValue };
           lastMessages.weight = sensorData;
+          debugSerial('Peso procesado:', weightValue);
         }
       }
       // Procesar confirmaciones de comandos
       else if (data.startsWith('OK:')) {
         sensorData = { type: 'confirmation', message: data };
+        debugSerial('Confirmación recibida:', data);
       }
       
       // Enviar los datos a todos los clientes conectados
@@ -144,6 +183,9 @@ function openSerialPort() {
 // Iniciar conexión serial
 let serialConnection = openSerialPort();
 
+// Corregir la duplicación del handler de WebSocket
+let clientHandlersRegistered = false;
+
 // Manejar conexiones WebSocket
 wss.on('connection', (ws) => {
   console.log('Cliente conectado');
@@ -163,10 +205,8 @@ wss.on('connection', (ws) => {
       
       // Si es un comando para la STM32
       if (data.command && serialConnection && serialConnection.port) {
-        console.log(`Enviando comando: ${data.command}`);
-        serialConnection.port.write(data.command + '\r\n', (err) => {
+        sendSerialCommand(serialConnection.port, data.command, (err) => {
           if (err) {
-            console.error('Error al enviar comando:', err);
             ws.send(JSON.stringify({
               type: 'error',
               message: `Error al enviar comando: ${err.message}`
@@ -187,37 +227,6 @@ wss.on('connection', (ws) => {
 
 // Objeto para almacenar conexiones activas
 let connections = new Set();
-
-// Manejar conexiones WebSocket
-wss.on('connection', (ws) => {
-  console.log('Cliente conectado');
-  connections.add(ws);
-  
-  // Manejar comandos desde el frontend
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message);
-      
-      // Si es un comando para la STM32
-      if (data.command && serialConnection && serialConnection.port) {
-        console.log(`Enviando comando: ${data.command}`);
-        serialConnection.port.write(data.command + '\r\n', (err) => {
-          if (err) {
-            console.error('Error al enviar comando:', err);
-          }
-        });
-      }
-    } catch (e) {
-      console.error('Error al procesar mensaje:', e);
-    }
-  });
-  
-  // Manejar desconexión
-  ws.on('close', () => {
-    console.log('Cliente desconectado');
-    connections.delete(ws);
-  });
-});
 
 // Ruta para mostrar información del sistema
 app.get('/api/status', (req, res) => {

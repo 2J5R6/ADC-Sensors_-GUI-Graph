@@ -5,7 +5,7 @@ class SensorMonitor {
     this.temperatureData = [];
     this.weightData = [];
     this.timeLabels = [];
-    this.maxDataPoints = 60; // Mayor cantidad de puntos para mejor visualización
+    this.maxDataPoints = 100;
     
     // Referencias a los gráficos
     this.temperatureWeightChart = null;
@@ -15,6 +15,7 @@ class SensorMonitor {
     
     // Estado del sistema
     this.isRunning = false;
+    this.graphPaused = false;
     
     // Timestamps para calcular el tiempo real de muestreo
     this.lastTempTimestamp = 0;
@@ -22,16 +23,33 @@ class SensorMonitor {
     this.tempSamples = [];
     this.weightSamples = [];
     
-    // Contador de datos recibidos
-    this.dataReceived = 0;
-    
-    // Flag para controlar si se debe dibujar con líneas
-    this.drawWithLines = false;
-    
     // Inicializar
+    this.clearConflictingScripts();
     this.initWebSocket();
     this.setupControls();
     this.createCharts();
+    
+    // Debug
+    this.debug = true;
+  }
+  
+  // Limpiar scripts conflictivos
+  clearConflictingScripts() {
+    // Eliminar scripts conflictivos y variables globales
+    if (window.chartLine) {
+      try {
+        window.chartLine.destroy();
+      } catch(e) {
+        console.error("Error al destruir chartLine:", e);
+      }
+      delete window.chartLine;
+    }
+    
+    window.temperatureData = undefined;
+    window.weightData = undefined;
+    window.timeLabels = undefined;
+    
+    console.log("Variables y scripts conflictivos limpiados.");
   }
   
   // Inicializar la conexión WebSocket
@@ -55,6 +73,7 @@ class SensorMonitor {
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        console.log("Datos recibidos:", data);
         
         // Manejar diferentes tipos de datos
         switch (data.type) {
@@ -76,9 +95,13 @@ class SensorMonitor {
             }
             this.lastTempTimestamp = now;
             
-            this.addDataPoint('temperature', data.value);
+            // Actualizar el valor mostrado independientemente de la pausa
             document.getElementById('temp-value').textContent = `${data.value.toFixed(2)} °C`;
-            this.dataReceived++;
+            
+            // Solo añadir al gráfico si no está pausado
+            if (!this.graphPaused) {
+              this.addDataPoint('temperature', data.value);
+            }
             break;
             
           case 'weight':
@@ -99,9 +122,13 @@ class SensorMonitor {
             }
             this.lastWeightTimestamp = nowWeight;
             
-            this.addDataPoint('weight', data.value);
+            // Actualizar el valor mostrado independientemente de la pausa
             document.getElementById('weight-value').textContent = `${data.value.toFixed(2)} g`;
-            this.dataReceived++;
+            
+            // Solo añadir al gráfico si no está pausado
+            if (!this.graphPaused) {
+              this.addDataPoint('weight', data.value);
+            }
             break;
             
           case 'confirmation':
@@ -147,10 +174,26 @@ class SensorMonitor {
       this.isRunning = !this.isRunning;
     });
     
+    // Botón para pausar/reanudar la gráfica
+    document.getElementById('chart-refresh').addEventListener('click', () => {
+      this.graphPaused = !this.graphPaused;
+      const button = document.getElementById('chart-refresh');
+      if (this.graphPaused) {
+        button.textContent = 'Reanudar Gráfica';
+        button.classList.replace('btn-outline-primary', 'btn-outline-success');
+        button.innerHTML = '<i class="fas fa-play me-1"></i> Reanudar Gráfica';
+      } else {
+        button.textContent = 'Pausar Gráfica';
+        button.classList.replace('btn-outline-success', 'btn-outline-primary');
+        button.innerHTML = '<i class="fas fa-pause me-1"></i> Pausar Gráfica';
+      }
+    });
+    
     // Controles para tiempos de muestreo
     document.getElementById('temp-sample-time').addEventListener('change', (e) => {
       const value = e.target.value;
       this.sendCommand(`T1:${value}`);
+      console.log(`Tiempo de muestreo de temperatura cambiado a ${value}`);
       // Reiniciar el cálculo del tiempo de muestreo
       this.tempSamples = [];
     });
@@ -158,6 +201,7 @@ class SensorMonitor {
     document.getElementById('weight-sample-time').addEventListener('change', (e) => {
       const value = e.target.value;
       this.sendCommand(`T2:${value}`);
+      console.log(`Tiempo de muestreo de peso cambiado a ${value}`);
       // Reiniciar el cálculo del tiempo de muestreo
       this.weightSamples = [];
     });
@@ -166,6 +210,7 @@ class SensorMonitor {
     document.getElementById('time-unit').addEventListener('change', (e) => {
       const value = e.target.value;
       this.sendCommand(`TU:${value}`);
+      console.log(`Unidad de tiempo cambiada a ${value}`);
       // Reiniciar el cálculo del tiempo de muestreo
       this.tempSamples = [];
       this.weightSamples = [];
@@ -205,7 +250,11 @@ class SensorMonitor {
   
   // Crear gráficos
   createCharts() {
-    const ctx = document.getElementById("chart-line").getContext("2d");
+    const ctx = document.getElementById('chart-line');
+    if (!ctx) {
+      console.error('No se encontró el elemento canvas "chart-line"');
+      return;
+    }
     
     // Asegurarnos de que Chart.js esté correctamente inicializado
     if (typeof Chart === 'undefined') {
@@ -213,15 +262,12 @@ class SensorMonitor {
       return;
     }
     
+    // Eliminar cualquier gráfico existente
+    if (this.temperatureWeightChart) {
+      this.temperatureWeightChart.destroy();
+    }
+    
     try {
-      // Configuración común para ambos conjuntos de datos
-      const commonConfig = {
-        borderWidth: 3,
-        pointRadius: 3,
-        fill: false,
-        tension: this.drawWithLines ? 0.4 : 0
-      };
-
       this.temperatureWeightChart = new Chart(ctx, {
         type: "line",
         data: {
@@ -229,32 +275,32 @@ class SensorMonitor {
           datasets: [
             {
               label: "Temperatura (°C)",
+              tension: 0.4,
+              borderWidth: 3,
+              pointRadius: 3,
               borderColor: "#cb0c9f",
-              backgroundColor: "rgba(203, 12, 159, 0.2)",
-              pointBackgroundColor: "#cb0c9f",
-              pointBorderColor: "#cb0c9f",
+              backgroundColor: "rgba(203, 12, 159, 0.1)",
+              fill: true,
               data: this.temperatureData,
               yAxisID: 'y-temperature',
-              ...commonConfig
             },
             {
               label: "Peso (g)",
+              tension: 0.4,
+              borderWidth: 3,
+              pointRadius: 3,
               borderColor: "#3A416F",
-              backgroundColor: "rgba(58, 65, 111, 0.2)",
-              pointBackgroundColor: "#3A416F",
-              pointBorderColor: "#3A416F",
+              backgroundColor: "rgba(58, 65, 111, 0.1)",
+              fill: true,
               data: this.weightData,
               yAxisID: 'y-weight',
-              ...commonConfig
             }
           ]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          animation: {
-            duration: 0, // Desactivar animación para mejor rendimiento inicial
-          },
+          animation: false, // Desactivar animación para mejor rendimiento
           plugins: {
             legend: {
               display: true,
@@ -269,6 +315,11 @@ class SensorMonitor {
             intersect: false,
             mode: 'nearest',
           },
+          elements: {
+            line: {
+              tension: 0.4
+            }
+          },
           scales: {
             'y-temperature': {
               type: 'linear',
@@ -278,23 +329,8 @@ class SensorMonitor {
                 display: true,
                 text: 'Temperatura (°C)'
               },
-              grid: {
-                drawBorder: false,
-                display: true,
-                drawOnChartArea: true,
-                drawTicks: false,
-                borderDash: [5, 5]
-              },
               ticks: {
-                display: true,
-                padding: 10,
-                color: '#b2b9bf',
-                font: {
-                  size: 11,
-                  family: "Inter",
-                  style: 'normal',
-                  lineHeight: 2
-                },
+                color: '#cb0c9f',
               }
             },
             'y-weight': {
@@ -305,48 +341,16 @@ class SensorMonitor {
                 display: true,
                 text: 'Peso (g)'
               },
-              grid: {
-                drawBorder: false,
-                display: false,
-              },
               ticks: {
-                display: true,
-                padding: 10,
                 color: '#3A416F',
-                font: {
-                  size: 11,
-                  family: "Inter",
-                  style: 'normal',
-                  lineHeight: 2
-                },
-              }
-            },
-            x: {
-              grid: {
-                drawBorder: false,
-                display: false,
               },
-              ticks: {
-                display: true,
-                color: '#b2b9bf',
-                padding: 20,
-                font: {
-                  size: 11,
-                  family: "Inter",
-                  style: 'normal',
-                  lineHeight: 2
-                },
+              grid: {
+                drawOnChartArea: false, // Solo mostrar líneas de rejilla para temperatura
               }
-            },
-          },
+            }
+          }
         },
       });
-      
-      // Actualizar el estado del botón según si estamos mostrando líneas o puntos
-      const refreshButton = document.getElementById('chart-refresh');
-      if (refreshButton) {
-        refreshButton.textContent = this.drawWithLines ? "Mostrar solo puntos" : "Conectar puntos";
-      }
       
       console.log("Gráfico creado correctamente");
     } catch (error) {
@@ -356,39 +360,49 @@ class SensorMonitor {
   
   // Añadir un nuevo punto de datos
   addDataPoint(type, value) {
-    // Solo añadir puntos si está en modo adquisición
-    if (!this.isRunning) return;
+    // Solo añadir puntos si está en modo adquisición y la gráfica no está pausada
+    if (!this.isRunning || this.graphPaused) return;
     
     const currentTime = new Date().toLocaleTimeString();
     
-    // Añadir nuevas etiquetas de tiempo
-    this.timeLabels.push(currentTime);
-    if (this.timeLabels.length > this.maxDataPoints) {
-      this.timeLabels.shift();
+    // Añadir etiqueta de tiempo si es necesario
+    if (this.timeLabels.length === 0 || 
+        this.timeLabels[this.timeLabels.length - 1] !== currentTime) {
+      this.timeLabels.push(currentTime);
+      
+      // Limitar el número de puntos mostrados
+      if (this.timeLabels.length > this.maxDataPoints) {
+        this.timeLabels.shift();
+        if (this.temperatureData.length > 0) this.temperatureData.shift();
+        if (this.weightData.length > 0) this.weightData.shift();
+      }
     }
     
+    // Simplemente añadir el nuevo valor según su tipo
     if (type === 'temperature') {
-      // Añadir dato de temperatura
       this.temperatureData.push(value);
-      if (this.temperatureData.length > this.maxDataPoints) {
-        this.temperatureData.shift();
+      
+      // Asegurar que el último punto de peso se mantenga actualizado
+      if (this.weightData.length < this.temperatureData.length) {
+        this.weightData.push(this.weightData.length > 0 ? this.weightData[this.weightData.length - 1] : null);
       }
     } else if (type === 'weight') {
-      // Añadir dato de peso
       this.weightData.push(value);
-      if (this.weightData.length > this.maxDataPoints) {
-        this.weightData.shift();
+      
+      // Asegurar que el último punto de temperatura se mantenga actualizado
+      if (this.temperatureData.length < this.weightData.length) {
+        this.temperatureData.push(this.temperatureData.length > 0 ? this.temperatureData[this.temperatureData.length - 1] : null);
       }
     }
     
-    // Asegurarse de que ambos arrays tengan la misma longitud
-    while (this.temperatureData.length < this.timeLabels.length) {
-      this.temperatureData.push(null);
-    }
-    while (this.weightData.length < this.timeLabels.length) {
-      this.weightData.push(null);
-    }
+    // Mantener los arrays con la misma longitud que las etiquetas de tiempo
+    while (this.temperatureData.length > this.timeLabels.length) this.temperatureData.pop();
+    while (this.weightData.length > this.timeLabels.length) this.weightData.pop();
     
+    // Debug
+    console.log(`Datos - etiquetas: ${this.timeLabels.length}, temp: ${this.temperatureData.length}, peso: ${this.weightData.length}`);
+    
+    // Actualizar el gráfico
     this.updateChart();
   }
   
@@ -398,28 +412,8 @@ class SensorMonitor {
       this.temperatureWeightChart.data.labels = this.timeLabels;
       this.temperatureWeightChart.data.datasets[0].data = this.temperatureData;
       this.temperatureWeightChart.data.datasets[1].data = this.weightData;
-      
-      // Aplicar la configuración de líneas o puntos
-      const tension = this.drawWithLines ? 0.4 : 0;
-      this.temperatureWeightChart.data.datasets.forEach(dataset => {
-        dataset.tension = tension;
-      });
-      
       this.temperatureWeightChart.update();
     }
-  }
-  
-  // Alternar entre mostrar líneas o puntos
-  toggleLineMode() {
-    this.drawWithLines = !this.drawWithLines;
-    
-    if (this.temperatureWeightChart) {
-      // Destruir y recrear el gráfico para aplicar cambios
-      this.temperatureWeightChart.destroy();
-      this.createCharts();
-    }
-    
-    return this.drawWithLines;
   }
   
   // Enviar comando a través de WebSocket
@@ -438,34 +432,40 @@ class SensorMonitor {
     if (statusElement) {
       statusElement.textContent = message;
     }
-    console.log(message);
   }
 }
 
 // Inicializar cuando el DOM esté listo
 document.addEventListener('DOMContentLoaded', () => {
-  // Eliminar la configuración de gráfico previa
-  if (window.chartLine) {
-    window.chartLine.destroy();
+  console.log("Inicializando monitor de sensores...");
+  
+  // Eliminar cualquier gráfico existente primero
+  const existingChart = Chart.getChart("chart-line");
+  if (existingChart) {
+    existingChart.destroy();
   }
   
-  // Eliminar el script antiguo para evitar conflictos
-  const oldScript = document.getElementById("old-chart-script");
-  if (oldScript) {
-    oldScript.remove();
+  // Eliminar variables globales que pueden interferir
+  if (window.chartLine) {
+    try {
+      window.chartLine.destroy();
+    } catch (e) { 
+      console.log("Error al destruir chartLine:", e);
+    }
+    delete window.chartLine;
   }
+  
+  // Eliminar script conflictivo en dashboard.html
+  const scripts = document.querySelectorAll('script');
+  scripts.forEach(script => {
+    if (!script.src && 
+        (script.textContent.includes('temperatureData') || 
+        script.textContent.includes('chartLine'))) {
+      console.log("Eliminando script conflictivo");
+      script.textContent = '// Script deshabilitado';
+    }
+  });
   
   // Inicializar el nuevo monitor de sensores
   window.sensorMonitor = new SensorMonitor();
-  
-  // Configurar el botón para alternar entre líneas y puntos
-  document.getElementById('chart-refresh').addEventListener('click', function() {
-    if (window.sensorMonitor) {
-      const showingLines = window.sensorMonitor.toggleLineMode();
-      this.textContent = showingLines ? "Mostrar solo puntos" : "Conectar puntos";
-      this.innerHTML = showingLines ? 
-        '<i class="fas fa-circle me-1"></i> Mostrar solo puntos' : 
-        '<i class="fas fa-project-diagram me-1"></i> Conectar puntos';
-    }
-  });
 });
