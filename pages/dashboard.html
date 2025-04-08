@@ -78,6 +78,19 @@
     .refresh-btn:hover {
       color: #324cdd;
     }
+    .disabled-control {
+      opacity: 0.6;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    #config-progress {
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 0.8; }
+      50% { opacity: 1; }
+      100% { opacity: 0.8; }
+    }
   </style>
 </head>
 
@@ -377,29 +390,28 @@
     // Eliminar variables globales y gráficos existentes
     if (typeof chartLine !== 'undefined') {
       try { chartLine.destroy(); } catch(e) { console.error(e); }
-    }
-    
+    }js"></script>
+    ript>
     // Limpieza completa de variables globales
     window.chartLine = undefined;
-    window.temperatureData = undefined;
+    window.temperatureData = undefined;r-diagnostics.js"></script>
     window.weightData = undefined;
     window.timeLabels = undefined;
     window.ws = undefined;
-    window.updateChart = undefined;
-  </script>
+    window.updateChart = undefined;    if (win && document.querySelector('#sidenav-scrollbar')) {
+  </script>options = {
 
   <!-- Script para verificar conectividad con el servidor -->
-  <script src="../assets/js/server-check.js"></script>
+  <script src="../assets/js/server-check.js"></script>document.querySelector('#sidenav-scrollbar'), options);
   <!-- Cargar primero sensors.js -->
-  <script src="../assets/js/sensors.js"></script>
-  <!-- Herramientas de prueba -->
-  <script src="../assets/js/test-data.js"></script>
+  <script src="../assets/js/sensors.js"></script>ipt>
+  <!-- Script para reiniciar dispositivo -->
+  <script src="../assets/js/reset-device.js"></script>ript async defer src="https://buttons.github.io/buttons.js"></script>
+  <!-- Herramientas de prueba -->rol Center for Soft Dashboard: parallax effects, scripts for the example pages etc -->
+  <script src="../assets/js/test-data.js"></script>js/soft-ui-dashboard.min.js?v=1.1.0"></script>
   <!-- Y después connectivity.js -->
   <script src="../assets/js/connectivity.js"></script>
-
-  <script>
-    var win = navigator.platform.indexOf('Win') > -1;
-    if (win && document.querySelector('#sidenav-scrollbar')) {
+  <script>    var win = navigator.platform.indexOf('Win') > -1;    if (win && document.querySelector('#sidenav-scrollbar')) {
       var options = {
         damping: '0.5'
       }

@@ -1,70 +1,100 @@
-// Monitor de conectividad WebSocket
-(() => {
-  // Variables de control
-  let connectionAttempts = 0;
-  const MAX_RETRY = 10;
-  let reconnectTimer = null;
-
-  // Función para verificar el estado de la conexión
-  function checkConnection() {
-    if (window.sensorMonitor && window.sensorMonitor.ws) {
+/**
+ * Monitoreo y recuperación de la conexión WebSocket
+ */
+(function() {
+  let reconnectAttempts = 0;
+  const MAX_RECONNECT_ATTEMPTS = 10;
+  const RECONNECT_INTERVAL = 3000; // 3 segundos
+  
+  // Verificar estado de conexión de forma periódica
+  function startConnectionMonitor() {
+    setInterval(() => {
+      if (!window.sensorMonitor) return;
+      
       const ws = window.sensorMonitor.ws;
       
-      if (ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-        console.log("[Connectivity] WebSocket cerrado o cerrándose");
-        connectionAttempts++;
-        
-        if (connectionAttempts <= MAX_RETRY) {
-          console.log(`[Connectivity] Reiniciando conexión (intento ${connectionAttempts})`);
-          
-          // Inicializar de nuevo el WebSocket
-          try {
-            window.sensorMonitor.initWebSocket();
-          } catch (err) {
-            console.error("[Connectivity] Error al reconectar:", err);
-          }
-        } else {
-          console.log("[Connectivity] Máximo de intentos alcanzado, esperando...");
-          
-          // Resetear contador y esperar más tiempo
-          connectionAttempts = 0;
-          
-          // Realizar un nuevo intento después de un tiempo más largo
-          setTimeout(() => {
-            if (window.sensorMonitor) {
-              window.sensorMonitor.initWebSocket();
-            }
-          }, 10000); // 10 segundos
-        }
+      if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        handleDisconnection();
       } else if (ws.readyState === WebSocket.OPEN) {
-        // Resetear contador si la conexión está activa
-        connectionAttempts = 0;
+        // Conexión activa, restablecer contador de intentos
+        reconnectAttempts = 0;
       }
+    }, RECONNECT_INTERVAL);
+  }
+  
+  // Manejar desconexiones
+  function handleDisconnection() {
+    console.log(`[Connectivity] Detectada desconexión. Intento ${reconnectAttempts + 1} de ${MAX_RECONNECT_ATTEMPTS}`);
+    
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      reconnectAttempts++;
+      
+      // Intentar reconectar
+      if (window.sensorMonitor && typeof window.sensorMonitor.initWebSocket === 'function') {
+        console.log('[Connectivity] Intentando reconexión...');
+        window.sensorMonitor.initWebSocket();
+      }
+    } else {
+      console.log('[Connectivity] Máximo de intentos alcanzado, se requiere intervención manual');
+      showReconnectPrompt();
     }
   }
-
-  // Iniciar monitoreo cuando el DOM esté listo
-  window.addEventListener('load', () => {
-    console.log("[Connectivity] Iniciando monitor de conectividad");
+  
+  // Mostrar opción para reconexión manual
+  function showReconnectPrompt() {
+    // Verificar si ya existe el prompt
+    if (document.getElementById('reconnect-prompt')) return;
     
-    // Iniciar verificación periódica
-    reconnectTimer = setInterval(checkConnection, 5000); // Verificar cada 5 segundos
+    const promptDiv = document.createElement('div');
+    promptDiv.id = 'reconnect-prompt';
+    promptDiv.style.cssText = `
+      position: fixed;
+      bottom: 15px;
+      left: 15px;
+      background-color: rgba(0,0,0,0.8);
+      color: white;
+      padding: 15px;
+      border-radius: 5px;
+      z-index: 9999;
+      max-width: 300px;
+    `;
     
-    // Escuchar evento de recuperación de red
-    window.addEventListener('online', () => {
-      console.log("[Connectivity] Conexión a Internet recuperada");
-      
-      // Intentar reconectar si hay un sensor monitor
+    promptDiv.innerHTML = `
+      <p><strong>Problemas de conexión</strong></p>
+      <p>No se ha podido establecer la comunicación con el servidor.</p>
+      <div class="d-flex justify-content-between">
+        <button id="reconnect-btn" class="btn btn-sm btn-primary">Reconectar</button>
+        <button id="dismiss-btn" class="btn btn-sm btn-outline-light ms-2">Cerrar</button>
+      </div>
+    `;
+    
+    document.body.appendChild(promptDiv);
+    
+    // Manejadores de eventos
+    document.getElementById('reconnect-btn').addEventListener('click', () => {
+      reconnectAttempts = 0; // Reiniciar contador
       if (window.sensorMonitor) {
         window.sensorMonitor.initWebSocket();
       }
+      promptDiv.remove();
     });
-  });
-
-  // Limpiar al cerrar la página
-  window.addEventListener('beforeunload', () => {
-    if (reconnectTimer) {
-      clearInterval(reconnectTimer);
+    
+    document.getElementById('dismiss-btn').addEventListener('click', () => {
+      promptDiv.remove();
+    });
+  }
+  
+  // Detectar cambios en la conexión a Internet
+  window.addEventListener('online', () => {
+    console.log('[Connectivity] Conexión de red recuperada. Intentando reconexión...');
+    reconnectAttempts = 0;
+    if (window.sensorMonitor) {
+      setTimeout(() => {
+        window.sensorMonitor.initWebSocket();
+      }, 1000);
     }
   });
+  
+  // Iniciar monitoreo cuando se cargue la página
+  window.addEventListener('load', startConnectionMonitor);
 })();

@@ -81,208 +81,194 @@ const wss = new WebSocket.Server({
   perMessageDeflate: false // Desactivar compresión para evitar problemas
 });
 
-// Función para enviar un comando al puerto serial
+// Función para enviar un comando al puerto serial con promesa para saber cuándo se completa
 function sendCommand(port, command) {
   if (!port) {
     console.error("Puerto serial no disponible");
     return Promise.reject(new Error("Puerto no disponible"));
   }
 
-  // Asegurar el formato correcto del comando
-  let cmd = command;
-  if (!cmd.endsWith('\r\n')) {
-    cmd += '\r\n';
-  }
+  // Preparar comando con salto de línea
+  const formattedCmd = command.endsWith('\r\n') ? command : command + '\r\n';
   
-  console.log(`Enviando comando: ${cmd.trim()}`);
+  console.log(`📤 Enviando comando: ${command}`);
   
   return new Promise((resolve, reject) => {
-    port.write(cmd, (err) => {
+    port.write(formattedCmd, (err) => {
       if (err) {
-        console.error(`Error al enviar comando ${cmd.trim()}:`, err);
+        console.error(`❌ Error al enviar comando: ${err.message}`);
         reject(err);
       } else {
-        console.log(`Comando ${cmd.trim()} enviado correctamente`);
+        console.log(`✅ Comando ${command} enviado correctamente`);
         resolve();
       }
     });
   });
 }
 
+// Función para enviar un comando y esperar respuesta (con retries)
+async function sendCommandWithResponse(port, command, expectedResponse, maxRetries = 3) {
+  let retries = 0;
+  let success = false;
+
+  while (retries < maxRetries && !success) {
+    try {
+      // Limpiar cualquier dato en el buffer
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      console.log(`📤 Intentando comando: ${command} (intento ${retries + 1})`);
+      const formattedCmd = command.endsWith('\r\n') ? command : command + '\r\n';
+      
+      // Enviar el comando
+      await new Promise((resolve, reject) => {
+        port.write(formattedCmd, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+      
+      // Esperamos respuesta directamente del controlador
+      console.log(`✅ Comando ${command} enviado correctamente, esperando respuesta...`);
+      success = true;
+    } catch (err) {
+      console.error(`❌ Error en intento ${retries + 1}: ${err.message}`);
+      retries++;
+      // Espera incremental entre reintentos
+      await new Promise(resolve => setTimeout(resolve, 500 * retries));
+    }
+  }
+  
+  return success;
+}
+
+// Función para ejecutar secuencia de configuración con pausas adecuadas
+async function executeConfigSequence(port, command) {
+  try {
+    console.log('🔄 Iniciando secuencia de configuración...');
+    
+    // 1. Detener la adquisición
+    console.log('⏹️ Deteniendo adquisición...');
+    await sendCommandWithResponse(port, 'b', 'OK:b');
+    
+    // Esperar a que el sistema se estabilice
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // 2. Enviar comando de configuración
+    console.log(`🛠️ Enviando configuración: ${command}`);
+    await sendCommandWithResponse(port, command, `OK:${command.split(':')[0]}`);
+    
+    // Actualizar estado del sistema en base al comando
+    const [setting, value] = command.split(':');
+    if (setting === 'T1') systemState.tempSampleTime = parseInt(value);
+    else if (setting === 'T2') systemState.weightSampleTime = parseInt(value);
+    else if (setting === 'TU') systemState.timeUnit = value;
+    else if (setting === 'FT') systemState.tempFilter = value === '1';
+    else if (setting === 'FP') systemState.weightFilter = value === '1';
+    else if (setting === 'ST') systemState.tempSamples = parseInt(value);
+    else if (setting === 'SP') systemState.weightSamples = parseInt(value);
+    
+    // Esperar a que la configuración se aplique
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // 3. Reanudar adquisición
+    console.log('▶️ Reiniciando adquisición...');
+    await sendCommandWithResponse(port, 'a', 'OK:a');
+    
+    // 4. Actualizar estado para interfaces
+    systemState.isRunning = true;
+    
+    // 5. Notificar éxito
+    console.log('✅ Secuencia de configuración completada');
+    return true;
+  } catch (error) {
+    console.error('❌ Error en secuencia de configuración:', error);
+    return false;
+  }
+}
+
 // Función para abrir el puerto serial
 function openSerialPort() {
   try {
+    console.log(`Intentando abrir puerto serial: ${SERIAL_PORT} a ${BAUD_RATE} baudios`);
+    
     const port = new SerialPort.SerialPort({
       path: SERIAL_PORT,
-      baudRate: BAUD_RATE,
+      baudRate: BAUD_RATE
     });
     
     const parser = port.pipe(new ReadlineParser({ delimiter: '\r\n' }));
     
-    // Manejar errores del puerto serie
-    port.on('error', (err) => {
-      console.error('Error en el puerto serie:', err);
-      setTimeout(() => {
-        console.log('Reintentando conexión al puerto serial...');
-        openSerialPort();
-      }, 5000); // Reintentar en 5 segundos
-    });
-    
-    // Manejar apertura del puerto
+    // Manejar apertura exitosa
     port.on('open', () => {
-      console.log(`Puerto serie ${SERIAL_PORT} conectado a ${BAUD_RATE} baudios`);
+      console.log(`✅ Puerto serial ${SERIAL_PORT} conectado correctamente`);
       
-      // Secuencia de inicialización
-      setTimeout(() => {
-        console.log('Enviando comandos de inicialización...');
-        
-        // Primero detener cualquier adquisición en curso
-        sendCommand(port, 'b')
-          .then(() => {
-            console.log('Sistema parado, solicitando estado actual');
-            
-            // Luego solicitar el estado
-            setTimeout(() => {
-              sendCommand(port, 'STATUS')
-                .catch(err => console.error('Error al solicitar estado:', err));
-            }, 1000);
-          })
-          .catch(err => {
-            console.error('Error en secuencia de inicialización:', err);
-          });
-      }, 2000);
+      // Inicializar el sistema con estado detenido
+      setTimeout(() => sendCommand(port, 'b'), 1000);
     });
     
-    // Procesar datos recibidos del puerto serie
-    parser.on('data', (data) => {
-      console.log('Datos recibidos:', data);
+    // Manejar errores
+    port.on('error', (err) => {
+      console.error(`❌ Error en puerto serial: ${err.message}`);
       
-      try {
-        // Estructura para enviar los datos formateados
-        let sensorData = null;
+      // Reintentar conexión después de un tiempo
+      setTimeout(openSerialPort, 5000);
+    });
+    
+    // Procesar datos recibidos
+    parser.on('data', (data) => {
+      console.log(`📊 Datos recibidos: ${data}`);
+      
+      // Extraer tipo y valor de datos
+      let sensorData = null;
+      
+      // Temperatura (TEMP:25.60)
+      if (data.startsWith('TEMP:')) {
+        const value = parseFloat(data.substring(5));
+        if (!isNaN(value)) {
+          sensorData = { type: 'temperature', value };
+          lastMessages.temperature = sensorData;
+        }
+      } 
+      // Intensidad/Peso (PESO:75.30)
+      else if (data.startsWith('PESO:')) {
+        const value = parseFloat(data.substring(5));
+        if (!isNaN(value)) {
+          sensorData = { type: 'weight', value };
+          lastMessages.weight = sensorData;
+        }
+      }
+      // Confirmaciones (OK:a, OK:b, etc.)
+      else if (data.startsWith('OK:')) {
+        const command = data.substring(3);
+        sensorData = { type: 'confirmation', message: data };
         
-        // Procesar datos de temperatura
-        if (data.startsWith('TEMP:')) {
-          const tempValue = parseFloat(data.substring(5));
-          if (!isNaN(tempValue)) {
-            sensorData = { type: 'temperature', value: tempValue };
-            lastMessages.temperature = sensorData;
-            console.log(`Temperatura procesada: ${tempValue}°C`);
-          }
-        } 
-        // Procesar datos de peso/intensidad
-        else if (data.startsWith('PESO:')) {
-          // Extraer parte numérica
-          const intensityText = data.substring(5).trim();
-          const intensityValue = parseFloat(intensityText);
-          
-          console.log(`Procesando dato de intensidad: "${intensityText}" => ${intensityValue}`);
-          
-          if (!isNaN(intensityValue)) {
-            // Seguimos usando 'weight' como tipo para mantener compatibilidad
-            sensorData = { type: 'weight', value: intensityValue };
-            lastMessages.weight = sensorData;
-            console.log(`Intensidad procesada: ${intensityValue}%`);
-          } else {
-            console.error(`Error al convertir valor de intensidad: "${intensityText}"`);
-          }
+        // Actualizar estado basado en la confirmación
+        if (command === 'a') {
+          systemState.isRunning = true;
+        } else if (command === 'b') {
+          systemState.isRunning = false;
         }
-        // Procesar confirmaciones de comandos
-        else if (data.startsWith('OK:') || data.startsWith('ERROR:')) {
-          sensorData = { type: 'confirmation', message: data };
-          console.log('Confirmación recibida:', data);
-          
-          // Actualizar estado del sistema basado en confirmaciones
-          if (data === 'OK:a') {
-            systemState.isRunning = true;
-            console.log('Sistema de adquisición ACTIVADO');
+      }
+      // Otros mensajes (debug, errores, etc.)
+      else {
+        console.log(`ℹ️ Mensaje no procesado: ${data}`);
+      }
+      
+      // Distribuir datos a todos los clientes
+      if (sensorData) {
+        const dataStr = JSON.stringify(sensorData);
+        connections.forEach(client => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(dataStr);
           }
-          else if (data === 'OK:b') {
-            systemState.isRunning = false;
-            console.log('Sistema de adquisición DETENIDO');
-          }
-          else if (data.startsWith('OK:T1:')) {
-            systemState.tempSampleTime = parseInt(data.split(':')[2]);
-          }
-          else if (data.startsWith('OK:T2:')) {
-            systemState.weightSampleTime = parseInt(data.split(':')[2]);
-          }
-          else if (data.startsWith('OK:TU:')) {
-            systemState.timeUnit = data.split(':')[2];
-          }
-          else if (data.startsWith('OK:FT:')) {
-            systemState.tempFilter = data.split(':')[2] === '1';
-          }
-          else if (data.startsWith('OK:FP:')) {
-            systemState.weightFilter = data.split(':')[2] === '1';
-          }
-          else if (data.startsWith('OK:ST:')) {
-            systemState.tempSamples = parseInt(data.split(':')[2]);
-          }
-          else if (data.startsWith('OK:SP:')) {
-            systemState.weightSamples = parseInt(data.split(':')[2]);
-          }
-        }
-        // Procesar mensajes de estado
-        else if (data.startsWith('INFO:STATUS:')) {
-          try {
-            // Extraer información del estado
-            const statusInfo = data.substring(12);
-            const statusParts = statusInfo.split(',');
-            
-            for (const part of statusParts) {
-              const [key, value] = part.split('=');
-              if (key === 'T1') systemState.tempSampleTime = parseInt(value);
-              if (key === 'T2') systemState.weightSampleTime = parseInt(value);
-              if (key === 'TU') systemState.timeUnit = value;
-              if (key === 'FT') systemState.tempFilter = value === '1';
-              if (key === 'FP') systemState.weightFilter = value === '1';
-              if (key === 'ST') systemState.tempSamples = parseInt(value);
-              if (key === 'SP') systemState.weightSamples = parseInt(value);
-              if (key === 'RUN') systemState.isRunning = value === '1';
-            }
-            
-            // Crear mensaje de estado para enviar a clientes
-            sensorData = { 
-              type: 'status',
-              state: {...systemState}
-            };
-            console.log('Estado del sistema actualizado:', systemState);
-          } catch (err) {
-            console.error('Error al procesar estado:', err);
-          }
-        }
-        
-        // Enviar los datos a todos los clientes conectados si hay datos válidos
-        if (sensorData) {
-          // Para depuración
-          if (sensorData.type === 'weight') {
-            console.log(`Enviando dato de intensidad a ${connections.size} cliente(s): ${JSON.stringify(sensorData)}`);
-          }
-          
-          const dataStr = JSON.stringify(sensorData);
-          connections.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
-              client.send(dataStr);
-            }
-          });
-        }
-      } catch (err) {
-        console.error('Error al procesar datos:', err);
+        });
       }
     });
     
     return { port, parser };
-  } catch (e) {
-    console.error('Error al abrir puerto serie:', e);
-    console.error('Asegúrate de que el puerto COM sea correcto y esté disponible.');
-    console.error(`Puerto configurado: ${SERIAL_PORT}`);
-    
-    setTimeout(() => {
-      console.log('Reintentando conexión al puerto serial...');
-      openSerialPort();
-    }, 5000);
-    
+  } catch (err) {
+    console.error(`❌ Error al abrir puerto serial: ${err.message}`);
+    setTimeout(openSerialPort, 5000);
     return null;
   }
 }
@@ -293,76 +279,113 @@ let serialConnection = openSerialPort();
 // Manejar conexiones WebSocket
 wss.on('connection', (ws, req) => {
   const clientIp = req.socket.remoteAddress;
-  console.log(`Cliente conectado desde ${clientIp}`);
+  console.log(`👤 Cliente conectado desde ${clientIp}`);
   connections.add(ws);
   
-  // Enviar confirmación de conexión exitosa
-  ws.send(JSON.stringify({
-    type: 'confirmation',
-    message: 'CONNECTION_OK'
-  }));
-  
-  // Enviar estado actual al nuevo cliente
-  ws.send(JSON.stringify({
-    type: 'status',
-    state: {...systemState}
-  }));
-  
-  // Enviar últimos valores de sensores si existen
+  // Enviar datos actuales al cliente
   if (lastMessages.temperature) {
     ws.send(JSON.stringify(lastMessages.temperature));
-    console.log('Enviando último valor de temperatura al nuevo cliente');
   }
   
   if (lastMessages.weight) {
     ws.send(JSON.stringify(lastMessages.weight));
-    console.log('Enviando último valor de peso al nuevo cliente');
   }
   
-  // Manejar comandos desde el frontend
-  ws.on('message', (message) => {
+  // Notificar estado actual
+  ws.send(JSON.stringify({
+    type: 'status',
+    state: systemState
+  }));
+  
+  // Manejar comandos desde el frontend - simplificado y robusto
+  ws.on('message', async (message) => {
     try {
-      const data = JSON.parse(message.toString()); // Asegurarnos que sea string
+      const data = JSON.parse(message.toString());
       
-      if (data.command && serialConnection && serialConnection.port) {
-        // Comandos simples (a, b) enviados tal cual
-        const cmd = data.command.trim();
-        console.log(`Recibido comando del cliente: ${cmd}`);
+      if (!data.command || !serialConnection || !serialConnection.port) {
+        console.log('❌ Comando no válido o conexión serial no disponible');
+        return;
+      }
+      
+      const command = data.command.trim();
+      console.log(`📩 Recibido comando: ${command}`);
+      
+      // Manejar comandos simples de inicio/parada
+      if (command === 'a') {
+        await sendCommandWithResponse(serialConnection.port, 'a', 'OK:a');
+        systemState.isRunning = true;
         
-        // Para los comandos a/b, enviar una sola vez para evitar problemas
-        if (cmd === 'a' || cmd === 'b') {
-          sendCommand(serialConnection.port, cmd)
-            .then(() => {
-              console.log(`Comando ${cmd} ejecutado correctamente`);
-              // Si el comando es b (detener), esperar y verificar estado
-              if (cmd === 'b') {
-                setTimeout(() => {
-                  sendCommand(serialConnection.port, 'STATUS')
-                    .catch(err => console.error('Error al solicitar estado:', err));
-                }, 1000);
-              }
-            })
-            .catch(err => {
-              console.error(`Error al enviar comando ${cmd}:`, err);
-              ws.send(JSON.stringify({
-                type: 'error',
-                message: `Error: ${err.message}`
+        // Notificar a todos los clientes
+        const confirmation = { type: 'confirmation', message: 'OK:a' };
+        const status = { type: 'status', state: {...systemState} };
+        
+        connections.forEach(client => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(confirmation));
+            client.send(JSON.stringify(status));
+          }
+        });
+      } 
+      else if (command === 'b') {
+        await sendCommandWithResponse(serialConnection.port, 'b', 'OK:b');
+        systemState.isRunning = false;
+        
+        // Notificar a todos los clientes
+        const confirmation = { type: 'confirmation', message: 'OK:b' };
+        const status = { type: 'status', state: {...systemState} };
+        
+        connections.forEach(client => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(confirmation));
+            client.send(JSON.stringify(status));
+          }
+        });
+      }
+      // Manejar comandos de configuración (patrón clave:valor)
+      else if (
+        command.match(/^(T1|T2|TU|FT|FP|ST|SP):\S+$/)
+      ) {
+        // Para todos los comandos de configuración, usar la secuencia completa
+        const success = await executeConfigSequence(serialConnection.port, command);
+        
+        if (success) {
+          // Notificar a todos los clientes
+          connections.forEach(client => {
+            if (client.readyState === WebSocket.OPEN) {
+              // Enviar confirmación
+              client.send(JSON.stringify({
+                type: 'confirmation',
+                message: `OK:${command}`
               }));
-            });
+              
+              // Enviar estado actualizado
+              client.send(JSON.stringify({
+                type: 'status',
+                state: {...systemState}
+              }));
+            }
+          });
         } else {
-          // Otros comandos
-          sendCommand(serialConnection.port, cmd)
-            .catch(err => {
-              console.error(`Error al enviar comando ${cmd}:`, err);
-              ws.send(JSON.stringify({
-                type: 'error',
-                message: `Error: ${err.message}`
-              }));
-            });
+          // Notificar error
+          ws.send(JSON.stringify({
+            type: 'error',
+            message: `Error al aplicar configuración: ${command}`
+          }));
         }
       }
+      else if (command === 'STATUS') {
+        // Comando de estado, solo enviarlo
+        await sendCommandWithResponse(serialConnection.port, 'STATUS');
+      }
+      else {
+        console.log(`⚠️ Comando desconocido: ${command}`);
+      }
     } catch (e) {
-      console.error('Error al procesar mensaje:', e);
+      console.error(`❌ Error al procesar mensaje: ${e.message}`);
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: `Error: ${e.message}`
+      }));
     }
   });
   

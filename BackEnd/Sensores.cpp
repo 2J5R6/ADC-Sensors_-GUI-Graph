@@ -233,7 +233,7 @@ extern "C" {
             while (((ADC1->SR & (1<<1)) >> 1) == 0) {} // Esperar a que termine la conversión
             ADC1->SR &= ~(1<<1); // Limpiar el flag EOC
             digital2 = ADC1->DR;
-            voltaje2 = (float)digital2 * (3.3f / 4095.0f); // Corrección para resolución completa de 12 bits
+            voltaje2 = (float)digital2 * (3.3f / 1023.0f); // Corrección para resolución completa de 10 bits
             pesog = (voltaje2 * 303.03f);
             
             // Aplicar filtro promedio si está activado
@@ -352,7 +352,8 @@ int main() {
     
     RCC->APB2ENR |= (1<<8); // Habilitar reloj ADC1
     ADC1->CR2 |= ((1<<10) | (1<<0)); // EOCS y ADC Enable
-    ADC1->CR1 &= ~(0b11<<24); // Resolución a 12 bits
+    ADC1->CR1 &= ~(0b11<<24); // limpiar bits de resolución
+    ADC1->CR1 |= (0b01<<24); // Resolución a 10 bits
     ADC1->SMPR1 |= (0b111<<12); // Tiempo de muestreo máximo
     ADC1->SQR3 = 14; // Canal 14 para PC4
     
